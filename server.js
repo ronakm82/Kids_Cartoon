@@ -15,7 +15,7 @@ if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
-// Job status store — tracks processing state
+// Job status store
 var jobs = {};
 
 var CARTOON_THEMES = [
@@ -98,7 +98,7 @@ async function getAudioDuration(audioPath) {
   return new Promise(function(resolve) {
     ffmpeg.ffprobe(audioPath, function(err, metadata) {
       if (err || !metadata || !metadata.format || !metadata.format.duration) {
-        console.log("Audio probe failed — defaulting 120s");
+        console.log("Audio probe failed: " + (err ? err.message : "no metadata") + " — defaulting 120s");
         resolve(120);
       } else {
         var dur = Math.ceil(metadata.format.duration) + 1;
@@ -116,13 +116,21 @@ async function imageToVideo(imagePath, outputVideoPath, durationSecs) {
       .input(imagePath)
       .inputOptions(["-loop 1", "-framerate 25"])
       .outputOptions([
-        "-c:v libx264", "-t " + durationSecs, "-pix_fmt yuv420p",
+        "-c:v libx264",
+        "-t " + durationSecs,
+        "-pix_fmt yuv420p",
         "-vf scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black",
-        "-preset fast", "-crf 23"
+        "-preset fast",
+        "-crf 23"
       ])
       .output(outputVideoPath)
-      .on("end", resolve)
-      .on("error", function(err) { reject(new Error("imageToVideo: " + err.message)); })
+      .on("end", function() {
+        console.log("Image to video done: " + fs.statSync(outputVideoPath).size + " bytes");
+        resolve();
+      })
+      .on("error", function(err) {
+        reject(new Error("imageToVideo: " + err.message));
+      })
       .run();
   });
 }
@@ -134,16 +142,22 @@ async function loopVideoToLength(inputPath, outputPath, durationSecs) {
       .input(inputPath)
       .inputOptions(["-stream_loop -1"])
       .outputOptions([
-        "-c:v libx264", "-t " + durationSecs, "-pix_fmt yuv420p",
+        "-c:v libx264",
+        "-t " + durationSecs,
+        "-pix_fmt yuv420p",
         "-vf scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black",
-        "-preset fast", "-crf 23", "-an"
+        "-preset fast",
+        "-crf 23",
+        "-an"
       ])
       .output(outputPath)
       .on("end", function() {
         console.log("Loop done: " + fs.statSync(outputPath).size + " bytes");
         resolve();
       })
-      .on("error", function(err) { reject(new Error("loopVideo: " + err.message)); })
+      .on("error", function(err) {
+        reject(new Error("loopVideo: " + err.message));
+      })
       .run();
   });
 }
@@ -178,38 +192,58 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
   if (serverUrl.indexOf("http") !== 0) serverUrl = "https://" + serverUrl;
 
   try {
-    // 1. Voice
-    console.log("[" + jobId + "] Downloading voice...");
+    // Step 1 — Download voice
+    console.log("[" + jobId + "] Step 1 — Downloading voice...");
     await getFile(voiceInput, voicePath);
-    if (fs.statSync(voicePath).size < 100) throw new Error("Voice too small");
+    if (fs.statSync(voicePath).size < 100) throw new Error("Voice file too small");
 
-    // 2. Duration
+    // Wait 1 second to ensure file is fully flushed before probing
+    await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+
+    // Step 2 — Get audio duration
     var audioDuration = await getAudioDuration(voicePath);
     if (audioDuration < 5) audioDuration = 120;
-    console.log("[" + jobId + "] Duration: " + audioDuration + "s");
+    console.log("[" + jobId + "] Final duration: " + audioDuration + "s");
 
-    // 3. Video/image
+    // Update job with duration so we know it's progressing
+    jobs[jobId].duration_secs = audioDuration;
+    jobs[jobId].stage = "fetching_video";
+
+    // Step 3 — Get cartoon video
+    console.log("[" + jobId + "] Step 3 — Getting cartoon video...");
     var pixabayUrl = await getPixabayVideoUrl(storyTheme);
+
     if (pixabayUrl) {
       await getFile(pixabayUrl, rawClipPath);
       if (fs.statSync(rawClipPath).size < 1000) throw new Error("Pixabay clip too small");
+      jobs[jobId].stage = "looping_video";
       await loopVideoToLength(rawClipPath, videoPath, audioDuration);
     } else if (videoInput && !isImageUrl(String(videoInput))) {
       await getFile(videoInput, rawClipPath);
+      jobs[jobId].stage = "looping_video";
       await loopVideoToLength(rawClipPath, videoPath, audioDuration);
     } else {
       var imgSrc = videoInput || ("https://picsum.photos/seed/" + jobId + "/1280/720");
       await getFile(imgSrc, imagePath);
+      jobs[jobId].stage = "converting_image";
       await imageToVideo(imagePath, videoPath, audioDuration);
     }
-    if (fs.statSync(videoPath).size < 1000) throw new Error("Video processing failed");
 
-    // 4. Music
+    if (fs.statSync(videoPath).size < 1000) throw new Error("Video processing failed — file too small");
+
+    // Step 4 — Download music
+    console.log("[" + jobId + "] Step 4 — Downloading music...");
+    jobs[jobId].stage = "downloading_music";
     await getFile(musicInput, musicPath);
-    if (fs.statSync(musicPath).size < 100) throw new Error("Music too small");
+    if (fs.statSync(musicPath).size < 100) throw new Error("Music file too small");
 
-    // 5. FFmpeg merge
-    console.log("[" + jobId + "] FFmpeg merging...");
+    console.log("[" + jobId + "] Files ready — video: " + fs.statSync(videoPath).size +
+      " voice: " + fs.statSync(voicePath).size +
+      " music: " + fs.statSync(musicPath).size);
+
+    // Step 5 — FFmpeg merge
+    console.log("[" + jobId + "] Step 5 — FFmpeg merging...");
+    jobs[jobId].stage = "merging";
     await new Promise(function(resolve, reject) {
       ffmpeg()
         .input(videoPath)
@@ -221,13 +255,19 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
           "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[audio]"
         ])
         .outputOptions([
-          "-map 0:v", "-map [audio]",
-          "-c:v copy", "-c:a aac", "-b:a 192k",
-          "-shortest", "-movflags faststart"
+          "-map 0:v",
+          "-map [audio]",
+          "-c:v copy",
+          "-c:a aac",
+          "-b:a 192k",
+          "-shortest",
+          "-movflags faststart"
         ])
         .output(outputPath)
         .on("end", resolve)
-        .on("error", function(err) { reject(new Error("FFmpeg: " + err.message)); })
+        .on("error", function(err) {
+          reject(new Error("FFmpeg: " + err.message));
+        })
         .run();
     });
 
@@ -256,12 +296,13 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
 
 // Health check
 app.get("/", function(req, res) {
-  res.json({ status: "kids-merger running", version: "7.0" });
+  res.json({ status: "kids-merger running", version: "7.1" });
 });
 
+// Debug env check
 app.get("/test", function(req, res) {
   res.json({
-    version: "7.0",
+    version: "7.1",
     pixabay_key: process.env.PIXABAY_API_KEY ? "SET" : "NOT SET",
     railway_url: process.env.RAILWAY_STATIC_URL || "NOT SET",
     port: process.env.PORT || "3000"
@@ -271,7 +312,9 @@ app.get("/test", function(req, res) {
 // Check job status
 app.get("/status/:jobId", function(req, res) {
   var job = jobs[req.params.jobId];
-  if (!job) return res.status(404).json({ error: "Job not found", status: "not_found" });
+  if (!job) {
+    return res.status(404).json({ error: "Job not found — may have expired", status: "not_found" });
+  }
   res.json(job);
 });
 
@@ -282,9 +325,10 @@ app.post("/merge", function(req, res) {
   var musicInput = req.body.music_url;
   var storyTheme = req.body.theme || "";
 
-  console.log("--- Merge request v7.0 ---");
+  console.log("--- Merge request v7.1 ---");
   console.log("voice_url:", voiceInput ? voiceInput.substring(0, 80) : "MISSING");
   console.log("video_url:", videoInput ? videoInput.substring(0, 80) : "MISSING");
+  console.log("theme:", storyTheme || "(none)");
 
   if (!voiceInput) {
     return res.status(400).json({ error: "Missing voice_url", status: "failed" });
@@ -301,15 +345,15 @@ app.post("/merge", function(req, res) {
   var serverUrl = process.env.RAILWAY_STATIC_URL || "kidscartoon-production.up.railway.app";
   if (serverUrl.indexOf("http") !== 0) serverUrl = "https://" + serverUrl;
 
-  // Respond IMMEDIATELY to Zapier — before processing starts
+  // Respond IMMEDIATELY to Zapier before processing starts
   res.json({
     status: "processing",
     job_id: jobId,
     status_url: serverUrl + "/status/" + jobId,
-    message: "Video is being processed. Check status_url for completion."
+    message: "Video is being processed. Check status_url in 5 minutes."
   });
 
-  // Process in background — does not block the response
+  // Process video in background
   processVideo(jobId, voiceInput, videoInput, musicInput, storyTheme);
 });
 
@@ -317,5 +361,5 @@ app.use("/outputs", express.static(OUTPUT_DIR));
 
 var PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
-  console.log("Kids merger v7.0 on port " + PORT);
+  console.log("Kids merger v7.1 on port " + PORT);
 });

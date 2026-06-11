@@ -11,12 +11,31 @@ var app = express();
 app.use(express.json({ limit: "50mb" }));
 
 var OUTPUT_DIR = path.join(__dirname, "outputs");
-if (!fs.existsSync(OUTPUT_DIR)) {
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+var JOBS_DIR = path.join(__dirname, "jobs");
+
+[OUTPUT_DIR, JOBS_DIR].forEach(function(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
+
+// --- Job status saved to disk so it survives Railway restarts ---
+function saveJob(jobId, data) {
+  try {
+    var jobFile = path.join(JOBS_DIR, jobId + ".json");
+    fs.writeFileSync(jobFile, JSON.stringify(data));
+  } catch (e) {
+    console.log("saveJob error: " + e.message);
+  }
 }
 
-// Job status store
-var jobs = {};
+function loadJob(jobId) {
+  try {
+    var jobFile = path.join(JOBS_DIR, jobId + ".json");
+    if (!fs.existsSync(jobFile)) return null;
+    return JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  } catch (e) {
+    return null;
+  }
+}
 
 var CARTOON_THEMES = [
   "cartoon animation kids",
@@ -174,9 +193,9 @@ function isImageUrl(urlStr) {
   );
 }
 
-// Background processing function
+// Background processing — status saved to disk
 async function processVideo(jobId, voiceInput, videoInput, musicInput, storyTheme) {
-  jobs[jobId] = { status: "processing", started: Date.now() };
+  saveJob(jobId, { status: "processing", stage: "starting", started: Date.now() });
 
   var tmpDir = path.join(__dirname, "tmp_" + jobId);
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -194,38 +213,36 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
   try {
     // Step 1 — Download voice
     console.log("[" + jobId + "] Step 1 — Downloading voice...");
+    saveJob(jobId, { status: "processing", stage: "downloading_voice" });
     await getFile(voiceInput, voicePath);
     if (fs.statSync(voicePath).size < 100) throw new Error("Voice file too small");
 
-    // Wait 1 second to ensure file is fully flushed before probing
+    // Wait 1s before probing
     await new Promise(function(resolve) { setTimeout(resolve, 1000); });
 
     // Step 2 — Get audio duration
     var audioDuration = await getAudioDuration(voicePath);
     if (audioDuration < 5) audioDuration = 120;
-    console.log("[" + jobId + "] Final duration: " + audioDuration + "s");
-
-    // Update job with duration so we know it's progressing
-    jobs[jobId].duration_secs = audioDuration;
-    jobs[jobId].stage = "fetching_video";
+    console.log("[" + jobId + "] Duration: " + audioDuration + "s");
+    saveJob(jobId, { status: "processing", stage: "fetching_video", duration_secs: audioDuration });
 
     // Step 3 — Get cartoon video
     console.log("[" + jobId + "] Step 3 — Getting cartoon video...");
     var pixabayUrl = await getPixabayVideoUrl(storyTheme);
 
     if (pixabayUrl) {
+      saveJob(jobId, { status: "processing", stage: "looping_video", duration_secs: audioDuration });
       await getFile(pixabayUrl, rawClipPath);
       if (fs.statSync(rawClipPath).size < 1000) throw new Error("Pixabay clip too small");
-      jobs[jobId].stage = "looping_video";
       await loopVideoToLength(rawClipPath, videoPath, audioDuration);
     } else if (videoInput && !isImageUrl(String(videoInput))) {
+      saveJob(jobId, { status: "processing", stage: "looping_video", duration_secs: audioDuration });
       await getFile(videoInput, rawClipPath);
-      jobs[jobId].stage = "looping_video";
       await loopVideoToLength(rawClipPath, videoPath, audioDuration);
     } else {
+      saveJob(jobId, { status: "processing", stage: "converting_image", duration_secs: audioDuration });
       var imgSrc = videoInput || ("https://picsum.photos/seed/" + jobId + "/1280/720");
       await getFile(imgSrc, imagePath);
-      jobs[jobId].stage = "converting_image";
       await imageToVideo(imagePath, videoPath, audioDuration);
     }
 
@@ -233,17 +250,13 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
 
     // Step 4 — Download music
     console.log("[" + jobId + "] Step 4 — Downloading music...");
-    jobs[jobId].stage = "downloading_music";
+    saveJob(jobId, { status: "processing", stage: "downloading_music", duration_secs: audioDuration });
     await getFile(musicInput, musicPath);
     if (fs.statSync(musicPath).size < 100) throw new Error("Music file too small");
 
-    console.log("[" + jobId + "] Files ready — video: " + fs.statSync(videoPath).size +
-      " voice: " + fs.statSync(voicePath).size +
-      " music: " + fs.statSync(musicPath).size);
-
     // Step 5 — FFmpeg merge
     console.log("[" + jobId + "] Step 5 — FFmpeg merging...");
-    jobs[jobId].stage = "merging";
+    saveJob(jobId, { status: "processing", stage: "merging", duration_secs: audioDuration });
     await new Promise(function(resolve, reject) {
       ffmpeg()
         .input(videoPath)
@@ -278,42 +291,46 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
 
     console.log("[" + jobId + "] Done — " + fileSizeMb + "MB — " + finalUrl);
 
-    jobs[jobId] = {
+    // Save completed status to disk
+    saveJob(jobId, {
       status: "done",
       final_video_url: finalUrl,
       file_size_mb: fileSizeMb,
       job_id: jobId,
       duration_secs: audioDuration,
       completed: Date.now()
-    };
+    });
 
   } catch (err) {
     if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
     console.error("[" + jobId + "] FAILED: " + err.message);
-    jobs[jobId] = { status: "failed", error: err.message, job_id: jobId };
+    saveJob(jobId, { status: "failed", error: err.message, job_id: jobId });
   }
 }
 
 // Health check
 app.get("/", function(req, res) {
-  res.json({ status: "kids-merger running", version: "7.1" });
+  res.json({ status: "kids-merger running", version: "7.2" });
 });
 
-// Debug env check
 app.get("/test", function(req, res) {
   res.json({
-    version: "7.1",
+    version: "7.2",
     pixabay_key: process.env.PIXABAY_API_KEY ? "SET" : "NOT SET",
     railway_url: process.env.RAILWAY_STATIC_URL || "NOT SET",
     port: process.env.PORT || "3000"
   });
 });
 
-// Check job status
+// Check job status — reads from disk
 app.get("/status/:jobId", function(req, res) {
-  var job = jobs[req.params.jobId];
+  var job = loadJob(req.params.jobId);
   if (!job) {
-    return res.status(404).json({ error: "Job not found — may have expired", status: "not_found" });
+    return res.status(404).json({
+      error: "Job not found — server may have restarted",
+      status: "not_found",
+      job_id: req.params.jobId
+    });
   }
   res.json(job);
 });
@@ -325,7 +342,7 @@ app.post("/merge", function(req, res) {
   var musicInput = req.body.music_url;
   var storyTheme = req.body.theme || "";
 
-  console.log("--- Merge request v7.1 ---");
+  console.log("--- Merge request v7.2 ---");
   console.log("voice_url:", voiceInput ? voiceInput.substring(0, 80) : "MISSING");
   console.log("video_url:", videoInput ? videoInput.substring(0, 80) : "MISSING");
   console.log("theme:", storyTheme || "(none)");
@@ -345,7 +362,7 @@ app.post("/merge", function(req, res) {
   var serverUrl = process.env.RAILWAY_STATIC_URL || "kidscartoon-production.up.railway.app";
   if (serverUrl.indexOf("http") !== 0) serverUrl = "https://" + serverUrl;
 
-  // Respond IMMEDIATELY to Zapier before processing starts
+  // Respond IMMEDIATELY to Zapier
   res.json({
     status: "processing",
     job_id: jobId,
@@ -353,7 +370,7 @@ app.post("/merge", function(req, res) {
     message: "Video is being processed. Check status_url in 5 minutes."
   });
 
-  // Process video in background
+  // Process in background
   processVideo(jobId, voiceInput, videoInput, musicInput, storyTheme);
 });
 
@@ -361,5 +378,5 @@ app.use("/outputs", express.static(OUTPUT_DIR));
 
 var PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
-  console.log("Kids merger v7.1 on port " + PORT);
+  console.log("Kids merger v7.2 on port " + PORT);
 });

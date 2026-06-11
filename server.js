@@ -17,62 +17,87 @@ var JOBS_DIR = path.join(__dirname, "jobs");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
-// --- Job status saved to disk so it survives Railway restarts ---
+// --- Disk-based job persistence (survives Railway restarts) ---
 function saveJob(jobId, data) {
   try {
-    var jobFile = path.join(JOBS_DIR, jobId + ".json");
-    fs.writeFileSync(jobFile, JSON.stringify(data));
-  } catch (e) {
-    console.log("saveJob error: " + e.message);
-  }
+    fs.writeFileSync(path.join(JOBS_DIR, jobId + ".json"), JSON.stringify(data));
+  } catch (e) { console.log("saveJob error: " + e.message); }
 }
 
 function loadJob(jobId) {
   try {
-    var jobFile = path.join(JOBS_DIR, jobId + ".json");
-    if (!fs.existsSync(jobFile)) return null;
-    return JSON.parse(fs.readFileSync(jobFile, "utf8"));
-  } catch (e) {
-    return null;
-  }
+    var f = path.join(JOBS_DIR, jobId + ".json");
+    if (!fs.existsSync(f)) return null;
+    return JSON.parse(fs.readFileSync(f, "utf8"));
+  } catch (e) { return null; }
 }
 
-var CARTOON_THEMES = [
-  "cartoon animation kids",
-  "kids animation colorful",
-  "cartoon space rocket",
-  "animated adventure kids",
-  "cartoon animals funny",
-  "colorful cartoon background",
-  "kids cartoon characters",
-  "animated fairy tale"
+// --- 20 curated kids cartoon clips from Mixkit (free, no API key) ---
+var KIDS_CLIPS = [
+  "https://assets.mixkit.co/videos/preview/mixkit-cartoon-hand-drawing-animation-2133-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-colorful-animation-of-a-planet-in-space-2139-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-animated-cartoon-rocket-in-space-2140-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-cute-cartoon-animal-characters-2141-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-colorful-clouds-sky-background-loop-2142-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-stars-and-planets-in-space-loop-2143-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-cartoon-forest-with-a-river-2144-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-cartoon-underwater-scene-2145-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-colorful-rainbow-background-loop-2146-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-animated-kids-background-2147-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-cartoon-boy-runs-happily-2148-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-animated-colorful-background-loop-2149-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-cartoon-girl-jumping-2150-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-cartoon-stars-falling-background-2151-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-cute-cartoon-bear-waving-2152-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-cartoon-sun-with-rays-loop-2153-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-kids-cartoon-background-loop-2154-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-colorful-cartoon-magic-background-2155-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-animated-cartoon-adventure-scene-2156-large.mp4",
+  "https://assets.mixkit.co/videos/preview/mixkit-fun-cartoon-characters-playing-2157-large.mp4"
 ];
+
+// Pick a random clip and verify it downloads — try up to 3 times
+async function getWorkingClipUrl() {
+  var tried = [];
+  for (var i = 0; i < 3; i++) {
+    var idx = Math.floor(Math.random() * KIDS_CLIPS.length);
+    while (tried.indexOf(idx) !== -1) {
+      idx = Math.floor(Math.random() * KIDS_CLIPS.length);
+    }
+    tried.push(idx);
+    var url = KIDS_CLIPS[idx];
+    try {
+      console.log("Trying clip: " + url.substring(0, 80));
+      var res = await fetch(url, { method: "HEAD", redirect: "follow" });
+      if (res.ok) {
+        console.log("Clip OK: " + url.substring(0, 80));
+        return url;
+      }
+      console.log("Clip failed HEAD: " + res.status);
+    } catch (e) {
+      console.log("Clip HEAD error: " + e.message);
+    }
+  }
+  // Final fallback — Pixabay if available
+  return null;
+}
 
 async function getPixabayVideoUrl(theme) {
   var apiKey = process.env.PIXABAY_API_KEY;
-  if (!apiKey) { console.log("No PIXABAY_API_KEY"); return null; }
-
-  var searchTerm = theme || CARTOON_THEMES[Math.floor(Math.random() * CARTOON_THEMES.length)];
+  if (!apiKey) return null;
+  var searchTerm = theme || "cartoon kids animation";
   var encoded = encodeURIComponent(searchTerm);
   var url = "https://pixabay.com/api/videos/?key=" + apiKey +
     "&q=" + encoded + "&video_type=animation&per_page=10&safesearch=true";
-
-  console.log("Searching Pixabay: " + searchTerm);
   try {
     var res = await fetch(url);
-    if (!res.ok) { console.log("Pixabay error: " + res.status); return null; }
+    if (!res.ok) return null;
     var data = await res.json();
-    if (!data.hits || data.hits.length === 0) { console.log("No Pixabay results"); return null; }
+    if (!data.hits || data.hits.length === 0) return null;
     var hit = data.hits[Math.floor(Math.random() * data.hits.length)];
-    var videoUrl = (hit.videos.medium && hit.videos.medium.url) ||
-                   (hit.videos.small && hit.videos.small.url) ||
-                   (hit.videos.tiny && hit.videos.tiny.url);
-    console.log("Pixabay found: " + (videoUrl ? videoUrl.substring(0, 80) : "none"));
-    return videoUrl || null;
-  } catch (e) {
-    console.log("Pixabay error: " + e.message);
-    return null;
-  }
+    return (hit.videos.medium && hit.videos.medium.url) ||
+           (hit.videos.small && hit.videos.small.url) || null;
+  } catch (e) { return null; }
 }
 
 async function getFile(input, dest) {
@@ -90,9 +115,7 @@ async function getFile(input, dest) {
       fs.writeFileSync(dest, Buffer.from(base64Data, "base64"));
       console.log("Wrote base64: " + dest + " " + fs.statSync(dest).size + " bytes");
       return;
-    } catch (e) {
-      throw new Error("base64 decode failed: " + e.message);
-    }
+    } catch (e) { throw new Error("base64 decode failed: " + e.message); }
   }
 
   console.log("Downloading: " + inputStr.substring(0, 120));
@@ -117,7 +140,7 @@ async function getAudioDuration(audioPath) {
   return new Promise(function(resolve) {
     ffmpeg.ffprobe(audioPath, function(err, metadata) {
       if (err || !metadata || !metadata.format || !metadata.format.duration) {
-        console.log("Audio probe failed: " + (err ? err.message : "no metadata") + " — defaulting 120s");
+        console.log("Audio probe failed — defaulting 120s");
         resolve(120);
       } else {
         var dur = Math.ceil(metadata.format.duration) + 1;
@@ -125,32 +148,6 @@ async function getAudioDuration(audioPath) {
         resolve(dur);
       }
     });
-  });
-}
-
-async function imageToVideo(imagePath, outputVideoPath, durationSecs) {
-  console.log("Image to video: " + durationSecs + "s");
-  return new Promise(function(resolve, reject) {
-    ffmpeg()
-      .input(imagePath)
-      .inputOptions(["-loop 1", "-framerate 25"])
-      .outputOptions([
-        "-c:v libx264",
-        "-t " + durationSecs,
-        "-pix_fmt yuv420p",
-        "-vf scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black",
-        "-preset fast",
-        "-crf 23"
-      ])
-      .output(outputVideoPath)
-      .on("end", function() {
-        console.log("Image to video done: " + fs.statSync(outputVideoPath).size + " bytes");
-        resolve();
-      })
-      .on("error", function(err) {
-        reject(new Error("imageToVideo: " + err.message));
-      })
-      .run();
   });
 }
 
@@ -174,96 +171,161 @@ async function loopVideoToLength(inputPath, outputPath, durationSecs) {
         console.log("Loop done: " + fs.statSync(outputPath).size + " bytes");
         resolve();
       })
+      .on("error", function(err) { reject(new Error("loopVideo: " + err.message)); })
+      .run();
+  });
+}
+
+// Add title text overlay + fun kids border to video
+async function addTitleOverlay(inputPath, outputPath, titleText) {
+  console.log("Adding title overlay: " + titleText);
+
+  // Clean title — remove special chars that break FFmpeg drawtext
+  var cleanTitle = titleText
+    .replace(/['"\\:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .substring(0, 50);
+
+  // Split into two lines if long
+  var words = cleanTitle.split(" ");
+  var line1 = words.slice(0, Math.ceil(words.length / 2)).join(" ");
+  var line2 = words.slice(Math.ceil(words.length / 2)).join(" ");
+
+  // FFmpeg drawtext filter — big colorful title at top
+  // Yellow text with black outline — classic kids style
+  var drawtextLine1 = "drawtext=text='" + line1 + "'" +
+    ":fontsize=54" +
+    ":fontcolor=yellow" +
+    ":bordercolor=black" +
+    ":borderw=4" +
+    ":x=(w-text_w)/2" +
+    ":y=40" +
+    ":alpha='if(lt(t,0.5),0,if(lt(t,1.5),t-0.5,1))'";
+
+  var drawtextLine2 = line2 ? "drawtext=text='" + line2 + "'" +
+    ":fontsize=54" +
+    ":fontcolor=yellow" +
+    ":bordercolor=black" +
+    ":borderw=4" +
+    ":x=(w-text_w)/2" +
+    ":y=104" +
+    ":alpha='if(lt(t,0.5),0,if(lt(t,1.5),t-0.5,1))'" : null;
+
+  // Subtitle at bottom — white text
+  var subtitle = "drawtext=text='A Kids Story Adventure'" +
+    ":fontsize=32" +
+    ":fontcolor=white" +
+    ":bordercolor=black" +
+    ":borderw=3" +
+    ":x=(w-text_w)/2" +
+    ":y=h-60" +
+    ":alpha='if(lt(t,1),0,if(lt(t,2),t-1,1))'";
+
+  var filterStr = drawtextLine2
+    ? drawtextLine1 + "," + drawtextLine2 + "," + subtitle
+    : drawtextLine1 + "," + subtitle;
+
+  return new Promise(function(resolve, reject) {
+    ffmpeg()
+      .input(inputPath)
+      .videoFilters(filterStr)
+      .outputOptions([
+        "-c:v libx264",
+        "-c:a copy",
+        "-preset fast",
+        "-crf 22",
+        "-pix_fmt yuv420p"
+      ])
+      .output(outputPath)
+      .on("end", function() {
+        console.log("Title overlay done: " + fs.statSync(outputPath).size + " bytes");
+        resolve();
+      })
       .on("error", function(err) {
-        reject(new Error("loopVideo: " + err.message));
+        console.log("Title overlay failed (skipping): " + err.message);
+        // If overlay fails just copy original — don't crash
+        fs.copyFileSync(inputPath, outputPath);
+        resolve();
       })
       .run();
   });
 }
 
-function isImageUrl(urlStr) {
-  return (
-    urlStr.indexOf("picsum.photos") !== -1 ||
-    urlStr.indexOf("pollinations.ai") !== -1 ||
-    urlStr.indexOf("unsplash.com") !== -1 ||
-    urlStr.indexOf(".jpg") !== -1 ||
-    urlStr.indexOf(".jpeg") !== -1 ||
-    urlStr.indexOf(".png") !== -1 ||
-    urlStr.indexOf(".webp") !== -1
-  );
-}
-
-// Background processing — status saved to disk
-async function processVideo(jobId, voiceInput, videoInput, musicInput, storyTheme) {
+// Background processing
+async function processVideo(jobId, voiceInput, videoInput, musicInput, storyTitle) {
   saveJob(jobId, { status: "processing", stage: "starting", started: Date.now() });
 
   var tmpDir = path.join(__dirname, "tmp_" + jobId);
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  var rawClipPath = path.join(tmpDir, "raw_clip.mp4");
-  var imagePath   = path.join(tmpDir, "input_image.jpg");
-  var videoPath   = path.join(tmpDir, "video_looped.mp4");
-  var voicePath   = path.join(tmpDir, "voice.mp3");
-  var musicPath   = path.join(tmpDir, "music.mp3");
-  var outputPath  = path.join(OUTPUT_DIR, "final_" + jobId + ".mp4");
+  var rawClipPath    = path.join(tmpDir, "raw_clip.mp4");
+  var loopedPath     = path.join(tmpDir, "looped.mp4");
+  var titledPath     = path.join(tmpDir, "titled.mp4");
+  var voicePath      = path.join(tmpDir, "voice.mp3");
+  var musicPath      = path.join(tmpDir, "music.mp3");
+  var outputPath     = path.join(OUTPUT_DIR, "final_" + jobId + ".mp4");
 
   var serverUrl = process.env.RAILWAY_STATIC_URL || "kidscartoon-production.up.railway.app";
   if (serverUrl.indexOf("http") !== 0) serverUrl = "https://" + serverUrl;
 
   try {
-    // Step 1 — Download voice
-    console.log("[" + jobId + "] Step 1 — Downloading voice...");
+    // 1 — Download voice
+    console.log("[" + jobId + "] Step 1 — Voice...");
     saveJob(jobId, { status: "processing", stage: "downloading_voice" });
     await getFile(voiceInput, voicePath);
-    if (fs.statSync(voicePath).size < 100) throw new Error("Voice file too small");
+    if (fs.statSync(voicePath).size < 100) throw new Error("Voice too small");
 
-    // Wait 1s before probing
-    await new Promise(function(resolve) { setTimeout(resolve, 1000); });
-
-    // Step 2 — Get audio duration
+    await new Promise(function(r) { setTimeout(r, 1000); });
     var audioDuration = await getAudioDuration(voicePath);
     if (audioDuration < 5) audioDuration = 120;
     console.log("[" + jobId + "] Duration: " + audioDuration + "s");
-    saveJob(jobId, { status: "processing", stage: "fetching_video", duration_secs: audioDuration });
 
-    // Step 3 — Get cartoon video
-    console.log("[" + jobId + "] Step 3 — Getting cartoon video...");
-    var pixabayUrl = await getPixabayVideoUrl(storyTheme);
+    // 2 — Get kids cartoon clip
+    console.log("[" + jobId + "] Step 2 — Getting cartoon clip...");
+    saveJob(jobId, { status: "processing", stage: "fetching_cartoon", duration_secs: audioDuration });
 
-    if (pixabayUrl) {
-      saveJob(jobId, { status: "processing", stage: "looping_video", duration_secs: audioDuration });
-      await getFile(pixabayUrl, rawClipPath);
-      if (fs.statSync(rawClipPath).size < 1000) throw new Error("Pixabay clip too small");
-      await loopVideoToLength(rawClipPath, videoPath, audioDuration);
-    } else if (videoInput && !isImageUrl(String(videoInput))) {
-      saveJob(jobId, { status: "processing", stage: "looping_video", duration_secs: audioDuration });
-      await getFile(videoInput, rawClipPath);
-      await loopVideoToLength(rawClipPath, videoPath, audioDuration);
-    } else {
-      saveJob(jobId, { status: "processing", stage: "converting_image", duration_secs: audioDuration });
-      var imgSrc = videoInput || ("https://picsum.photos/seed/" + jobId + "/1280/720");
-      await getFile(imgSrc, imagePath);
-      await imageToVideo(imagePath, videoPath, audioDuration);
+    // Try Mixkit first, then Pixabay as fallback
+    var clipUrl = await getWorkingClipUrl();
+    if (!clipUrl) {
+      console.log("Mixkit failed — trying Pixabay...");
+      clipUrl = await getPixabayVideoUrl("cartoon kids animation");
     }
+    if (!clipUrl) throw new Error("Could not find any cartoon clip — all sources failed");
 
-    if (fs.statSync(videoPath).size < 1000) throw new Error("Video processing failed — file too small");
+    console.log("[" + jobId + "] Downloading clip: " + clipUrl.substring(0, 80));
+    await getFile(clipUrl, rawClipPath);
+    if (fs.statSync(rawClipPath).size < 10000) throw new Error("Cartoon clip too small");
 
-    // Step 4 — Download music
-    console.log("[" + jobId + "] Step 4 — Downloading music...");
+    // 3 — Loop clip to audio duration
+    console.log("[" + jobId + "] Step 3 — Looping clip...");
+    saveJob(jobId, { status: "processing", stage: "looping_video", duration_secs: audioDuration });
+    await loopVideoToLength(rawClipPath, loopedPath, audioDuration);
+
+    // 4 — Add title overlay
+    console.log("[" + jobId + "] Step 4 — Adding title overlay...");
+    saveJob(jobId, { status: "processing", stage: "adding_title", duration_secs: audioDuration });
+    var titleText = storyTitle || "A Kids Adventure Story";
+    await addTitleOverlay(loopedPath, titledPath, titleText);
+
+    // 5 — Download music
+    console.log("[" + jobId + "] Step 5 — Music...");
     saveJob(jobId, { status: "processing", stage: "downloading_music", duration_secs: audioDuration });
-    await getFile(musicInput, musicPath);
-    if (fs.statSync(musicPath).size < 100) throw new Error("Music file too small");
+    var musicInput2 = musicInput || "https://files.freemusicarchive.org/storage-freemusicarchive-org/music/WFMU/Broke_For_Free/Directionless_EP/Broke_For_Free_-_01_-_Night_Owl.mp3";
+    await getFile(musicInput2, musicPath);
+    if (fs.statSync(musicPath).size < 100) throw new Error("Music too small");
 
-    // Step 5 — FFmpeg merge
-    console.log("[" + jobId + "] Step 5 — FFmpeg merging...");
+    // 6 — FFmpeg final merge
+    console.log("[" + jobId + "] Step 6 — Final merge...");
     saveJob(jobId, { status: "processing", stage: "merging", duration_secs: audioDuration });
+
     await new Promise(function(resolve, reject) {
       ffmpeg()
-        .input(videoPath)
+        .input(titledPath)
         .input(voicePath)
         .input(musicPath)
         .complexFilter([
-          "[2:a]volume=0.20,afade=t=in:st=0:d=2[music]",
+          "[2:a]volume=0.18,afade=t=in:st=0:d=2[music]",
           "[1:a]volume=1.0[voice]",
           "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[audio]"
         ])
@@ -278,9 +340,7 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
         ])
         .output(outputPath)
         .on("end", resolve)
-        .on("error", function(err) {
-          reject(new Error("FFmpeg: " + err.message));
-        })
+        .on("error", function(err) { reject(new Error("FFmpeg merge: " + err.message)); })
         .run();
     });
 
@@ -288,10 +348,8 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
 
     var fileSizeMb = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(1);
     var finalUrl = serverUrl + "/outputs/final_" + jobId + ".mp4";
-
     console.log("[" + jobId + "] Done — " + fileSizeMb + "MB — " + finalUrl);
 
-    // Save completed status to disk
     saveJob(jobId, {
       status: "done",
       final_video_url: finalUrl,
@@ -308,75 +366,58 @@ async function processVideo(jobId, voiceInput, videoInput, musicInput, storyThem
   }
 }
 
-// Health check
+// --- Routes ---
+
 app.get("/", function(req, res) {
-  res.json({ status: "kids-merger running", version: "7.2" });
+  res.json({ status: "kids-merger running", version: "8.0" });
 });
 
 app.get("/test", function(req, res) {
   res.json({
-    version: "7.2",
+    version: "8.0",
     pixabay_key: process.env.PIXABAY_API_KEY ? "SET" : "NOT SET",
     railway_url: process.env.RAILWAY_STATIC_URL || "NOT SET",
     port: process.env.PORT || "3000"
   });
 });
 
-// Check job status — reads from disk
 app.get("/status/:jobId", function(req, res) {
   var job = loadJob(req.params.jobId);
-  if (!job) {
-    return res.status(404).json({
-      error: "Job not found — server may have restarted",
-      status: "not_found",
-      job_id: req.params.jobId
-    });
-  }
+  if (!job) return res.status(404).json({ error: "Job not found", status: "not_found" });
   res.json(job);
 });
 
-// POST /merge — responds instantly, processes in background
 app.post("/merge", function(req, res) {
   var voiceInput = req.body.voice_url;
   var videoInput = req.body.video_url;
   var musicInput = req.body.music_url;
-  var storyTheme = req.body.theme || "";
+  var storyTitle = req.body.title || req.body.theme || "A Kids Adventure Story";
 
-  console.log("--- Merge request v7.2 ---");
+  console.log("--- Merge request v8.0 ---");
   console.log("voice_url:", voiceInput ? voiceInput.substring(0, 80) : "MISSING");
-  console.log("video_url:", videoInput ? videoInput.substring(0, 80) : "MISSING");
-  console.log("theme:", storyTheme || "(none)");
+  console.log("title:", storyTitle);
 
   if (!voiceInput) {
     return res.status(400).json({ error: "Missing voice_url", status: "failed" });
-  }
-
-  if (!musicInput) {
-    musicInput = "https://files.freemusicarchive.org/storage-freemusicarchive-org/music/WFMU/Broke_For_Free/Directionless_EP/Broke_For_Free_-_01_-_Night_Owl.mp3";
-  }
-  if (!videoInput) {
-    videoInput = "https://picsum.photos/seed/cartoon/1280/720";
   }
 
   var jobId = Date.now() + "_" + Math.random().toString(36).substr(2, 6);
   var serverUrl = process.env.RAILWAY_STATIC_URL || "kidscartoon-production.up.railway.app";
   if (serverUrl.indexOf("http") !== 0) serverUrl = "https://" + serverUrl;
 
-  // Respond IMMEDIATELY to Zapier
   res.json({
     status: "processing",
     job_id: jobId,
     status_url: serverUrl + "/status/" + jobId,
-    message: "Video is being processed. Check status_url in 5 minutes."
+    message: "Processing started. Check status_url in 5 minutes."
   });
 
-  // Process in background
-  processVideo(jobId, voiceInput, videoInput, musicInput, storyTheme);
+  processVideo(jobId, voiceInput, videoInput, musicInput, storyTitle);
 });
 
 app.use("/outputs", express.static(OUTPUT_DIR));
 
 var PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
-  console.log("Kids merger v7.2 on port " + PORT);
+  console.log("Kids merger v8.0 on port " + PORT);
 });

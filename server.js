@@ -71,28 +71,26 @@ async function imageToVideo(imagePath, outputVideoPath, durationSecs) {
   return new Promise(function(resolve, reject) {
     ffmpeg()
       .input(imagePath)
-      .inputOptions([
-        "-loop 1",
-        "-framerate 25"
-      ])
+      .inputOptions(["-loop 1"])
+      .input("anullsrc=r=44100:cl=stereo")
+      .inputOptions(["-f lavfi"])
       .outputOptions([
         "-c:v libx264",
         "-t " + durationSecs,
         "-pix_fmt yuv420p",
         "-vf scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black",
+        "-c:a aac",
+        "-shortest",
         "-preset fast",
         "-crf 23"
       ])
       .output(outputVideoPath)
-      .on("start", function(cmd) {
-        console.log("FFmpeg image→video cmd: " + cmd.substring(0, 100));
-      })
       .on("end", function() {
-        console.log("Image→video done: " + outputVideoPath);
+        console.log("Image to video done — duration set: " + durationSecs + "s");
         resolve();
       })
       .on("error", function(err) {
-        console.error("Image→video error: " + err.message);
+        console.error("Image to video error: " + err.message);
         reject(err);
       })
       .run();

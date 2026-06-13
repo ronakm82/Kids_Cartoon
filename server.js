@@ -17,7 +17,6 @@ var JOBS_DIR = path.join(__dirname, "jobs");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
-// --- Disk-based job persistence ---
 function saveJob(jobId, data) {
   try {
     fs.writeFileSync(path.join(JOBS_DIR, jobId + ".json"), JSON.stringify(data));
@@ -69,7 +68,6 @@ async function getAudioDuration(audioPath) {
   });
 }
 
-// Convert image to video with specified duration
 async function imageToVideoClip(imagePath, outputPath, durationSecs, isLastScene) {
   console.log("Creating video clip from image: " + durationSecs + "s");
   return new Promise(function(resolve, reject) {
@@ -96,7 +94,6 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs, isLastScene
   });
 }
 
-// Concatenate multiple video clips with fade transitions
 async function concatenateClips(clipPaths, outputPath) {
   console.log("Concatenating " + clipPaths.length + " clips with fade transitions...");
 
@@ -108,6 +105,86 @@ async function concatenateClips(clipPaths, outputPath) {
   fs.writeFileSync(concatFile, concatContent);
 
   return new Promise(function(resolve, reject) {
+    var fadeIndex = Math.max(0, clipPaths.length - 1);
+    
     ffmpeg()
       .input(concatFile)
-      .inputOptions(
+      .inputOptions(["-f concat", "-safe 0"])
+      .videoFilters("[0:v]fade=t=out:st=" + fadeIndex + ":d=0.5[v]")
+      .outputOptions([
+        "-c:v libx264",
+        "-c:a aac",
+        "-pix_fmt yuv420p",
+        "-map [v]",
+        "-map 0:a",
+        "-preset faster",
+        "-crf 22"
+      ])
+      .output(outputPath)
+      .on("end", function() {
+        console.log("Concatenation done: " + fs.statSync(outputPath).size + " bytes");
+        if (fs.existsSync(concatFile)) fs.unlinkSync(concatFile);
+        resolve();
+      })
+      .on("error", function(err) {
+        if (fs.existsSync(concatFile)) fs.unlinkSync(concatFile);
+        reject(new Error("concatenateClips: " + err.message));
+      })
+      .run();
+  });
+}
+
+async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPath) {
+  console.log("Professional video assembly with audio mixing...");
+
+  return new Promise(function(resolve, reject) {
+    ffmpeg()
+      .input(videoPath)
+      .input(voicePath)
+      .input(musicPath)
+      .complexFilter([
+        "[1:a]aformat=sample_rates=44100[voice]",
+        "[2:a]volume=0.15,afade=t=in:st=0:d=2[music]",
+        "[voice][music]amix=inputs=2:duration=first:dropout_transition=1[audio]"
+      ])
+      .outputOptions([
+        "-map 0:v:0",
+        "-map [audio]",
+        "-c:v copy",
+        "-c:a aac",
+        "-b:a 192k",
+        "-shortest",
+        "-movflags faststart",
+        "-y"
+      ])
+      .output(outputPath)
+      .on("end", function() {
+        console.log("Assembly complete: " + fs.statSync(outputPath).size + " bytes");
+        resolve();
+      })
+      .on("error", function(err) {
+        reject(new Error("assembleVideo: " + err.message));
+      })
+      .run();
+  });
+}
+
+async function processVideo(jobId, voiceInput, musicInput, scenesInput, storyTitle) {
+  saveJob(jobId, { status: "processing", stage: "starting", started: Date.now() });
+
+  var tmpDir = path.join(__dirname, "tmp_" + jobId);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  var voicePath = path.join(tmpDir, "voice.mp3");
+  var musicPath = path.join(tmpDir, "music.mp3");
+  var outputPath = path.join(OUTPUT_DIR, "final_" + jobId + ".mp4");
+
+  var serverUrl = process.env.RAILWAY_STATIC_URL || "kidscartoon-production.up.railway.app";
+  if (serverUrl.indexOf("http") !== 0) serverUrl = "https://" + serverUrl;
+
+  try {
+    if (!scenesInput || scenesInput.length === 0) {
+      throw new Error("No scenes provided");
+    }
+
+    console.log("[" + jobId + "] Processing " + scenesInput.length + " scenes

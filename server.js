@@ -74,4 +74,40 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs, isLastScene
   console.log("Creating video clip from image: " + durationSecs + "s");
   return new Promise(function(resolve, reject) {
     ffmpeg()
-      .input(image
+      .input(imagePath)
+      .inputOptions(["-loop 1", "-framerate 24"])
+      .outputOptions([
+        "-c:v libx264",
+        "-t " + durationSecs,
+        "-pix_fmt yuv420p",
+        "-vf scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black",
+        "-preset faster",
+        "-crf 22"
+      ])
+      .output(outputPath)
+      .on("end", function() {
+        console.log("Clip done: " + fs.statSync(outputPath).size + " bytes");
+        resolve();
+      })
+      .on("error", function(err) {
+        reject(new Error("imageToVideoClip: " + err.message));
+      })
+      .run();
+  });
+}
+
+// Concatenate multiple video clips with fade transitions
+async function concatenateClips(clipPaths, outputPath) {
+  console.log("Concatenating " + clipPaths.length + " clips with fade transitions...");
+
+  var concatFile = outputPath.replace(/\.mp4$/, "_concat.txt");
+  var concatContent = clipPaths.map(function(p) {
+    return "file '" + p + "'";
+  }).join("\n");
+
+  fs.writeFileSync(concatFile, concatContent);
+
+  return new Promise(function(resolve, reject) {
+    ffmpeg()
+      .input(concatFile)
+      .inputOptions(

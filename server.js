@@ -187,4 +187,148 @@ async function processVideo(jobId, voiceInput, musicInput, scenesInput, storyTit
       throw new Error("No scenes provided");
     }
 
-    console.log("[" + jobId + "] Processing " + scenesInput.length + " scenes
+    console.log("[" + jobId + "] Processing " + scenesInput.length + " scenes");
+    saveJob(jobId, { status: "processing", stage: "downloading_assets" });
+
+    console.log("[" + jobId + "] Downloading voice...");
+    await getFile(voiceInput, voicePath);
+    if (fs.statSync(voicePath).size < 100) throw new Error("Voice file too small");
+
+    await new Promise(function(r) { setTimeout(r, 1000); });
+    var totalDuration = await getAudioDuration(voicePath);
+    if (totalDuration < 10) totalDuration = 120;
+    console.log("[" + jobId + "] Total duration: " + totalDuration + "s");
+
+    var scenes = scenesInput;
+    var totalChars = scenes.reduce(function(sum, s) { return sum + (s.characterCount || s.estimatedDuration * 20); }, 0);
+    var sceneDurations = scenes.map(function(scene) {
+      var ratio = (scene.characterCount || scene.estimatedDuration * 20) / totalChars;
+      return Math.max(3, Math.round(ratio * totalDuration));
+    });
+
+    var sumDurations = sceneDurations.reduce(function(a, b) { return a + b; }, 0);
+    if (sumDurations !== totalDuration) {
+      var diff = totalDuration - sumDurations;
+      sceneDurations[sceneDurations.length - 1] += diff;
+    }
+
+    console.log("[" + jobId + "] Scene durations: " + sceneDurations.join(", "));
+    saveJob(jobId, { status: "processing", stage: "processing_scenes", totalScenes: scenes.length });
+
+    var clipPaths = [];
+    for (var i = 0; i < scenes.length; i++) {
+      var scene = scenes[i];
+      var duration = sceneDurations[i];
+      var imagePath = path.join(tmpDir, "scene_" + i + ".jpg");
+      var clipPath = path.join(tmpDir, "clip_" + i + ".mp4");
+
+      console.log("[" + jobId + "] Scene " + (i + 1) + "/" + scenes.length + " (" + duration + "s)");
+      
+      if (scene.imageUrl && scene.imageUrl.startsWith('data:image')) {
+        console.log("Saving base64 image data...");
+        var base64Data = scene.imageUrl.split(';base64,').pop();
+        fs.writeFileSync(imagePath, Buffer.from(base64Data, 'base64'));
+      } else {
+        await getFile(scene.imageUrl, imagePath);
+      }
+
+      if (fs.statSync(imagePath).size < 5000) throw new Error("Scene " + (i + 1) + " image too small");
+
+      await imageToVideoClip(imagePath, clipPath, duration, i === scenes.length - 1);
+      clipPaths.push(clipPath);
+
+      try { fs.unlinkSync(imagePath); } catch(e){}
+      scene.imageUrl = null; 
+
+      saveJob(jobId, {
+        status: "processing",
+        stage: "processing_scenes",
+        progress: Math.round((i + 1) / scenes.length * 100) + "%",
+        totalScenes: scenes.length
+      });
+    }
+
+    console.log("[" + jobId + "] Concatenating " + clipPaths.length + " clips...");
+    saveJob(jobId, { status: "processing", stage: "concatenating" });
+    var concatPath = path.join(tmpDir, "concatenated.mp4");
+    await concatenateClips(clipPaths, concatPath);
+
+    console.log("[" + jobId + "] Downloading music...");
+    saveJob(jobId, { status: "processing", stage: "downloading_music" });
+    var musicUrl = musicInput || "https://files.freemusicarchive.org/storage-freemusicarchive-org/music/WFMU/Broke_For_Free/Directionless_EP/Broke_For_Free_-_01_-_Night_Owl.mp3";
+    await getFile(musicUrl, musicPath);
+    if (fs.statSync(musicPath).size < 100) throw new Error("Music file too small");
+
+    console.log("[" + jobId + "] Professional audio assembly...");
+    saveJob(jobId, { status: "processing", stage: "assembling_audio" });
+    await assembleVideoWithAudio(concatPath, voicePath, musicPath, outputPath);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    var fileSizeMb = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(1);
+    var finalUrl = serverUrl + "/outputs/final_" + jobId + ".mp4";
+
+    console.log("[" + jobId + "] SUCCESS — " + fileSizeMb + "MB");
+
+    saveJob(jobId, {
+      status: "done",
+      final_video_url: finalUrl,
+      file_size_mb: fileSizeMb,
+      job_id: jobId,
+      duration_secs: totalDuration,
+      scenes: scenes.length,
+      completed: Date.now()
+    });
+
+  } catch (err) {
+    if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+    console.error("[" + jobId + "] FAILED: " + err.message);
+    saveJob(jobId, { status: "failed", error: err.message, job_id: jobId });
+  }
+}
+
+app.get("/", function(req, res) {
+  res.json({ status: "kids-merger-pro running", version: "9.0" });
+});
+
+app.get("/test", function(req, res) {
+  res.json({ version: "9.0", status: "Professional scene-based video generation" });
+});
+
+app.get("/status/:jobId", function(req, res) {
+  var job = loadJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Job not found", status: "not_found" });
+  res.json(job);
+});
+
+app.post("/merge", function(req, res) {
+  var voiceInput = req.body.voice_url;
+  var musicInput = req.body.music_url;
+  var scenesInput = req.body.scenes;
+  var storyTitle = req.body.title || "A Kids Story Adventure";
+
+  console.log("--- Merge request v9.0 Professional ---");
+  if (!voiceInput || !scenesInput || scenesInput.length === 0) {
+    return res.status(400).json({ error: "Missing voice_url or scenes", status: "failed" });
+  }
+
+  var jobId = Date.now() + "_" + Math.random().toString(36).substr(2, 6);
+  var serverUrl = process.env.RAILWAY_STATIC_URL || "kidscartoon-production.up.railway.app";
+  if (serverUrl.indexOf("http") !== 0) serverUrl = "https://" + serverUrl;
+
+  res.json({
+    status: "processing",
+    job_id: jobId,
+    status_url: serverUrl + "/status/" + jobId,
+    message: "Professional video generation started."
+  });
+
+  processVideo(jobId, voiceInput, musicInput, scenesInput, storyTitle);
+});
+
+app.use("/outputs", express.static(OUTPUT_DIR));
+
+var PORT = process.env.PORT || 3000;
+app.listen(PORT, function() {
+  console.log("Kids merger v9.0 Professional on port " + PORT);
+});

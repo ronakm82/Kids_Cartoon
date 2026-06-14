@@ -53,18 +53,30 @@ async function getFile(input, dest) {
   console.log("✓ Saved: " + path.basename(dest) + " (" + buffer.length + " bytes)");
 }
 
-function createVideo(imagePath, voicePath, outputPath) {
-  console.log("Creating video...");
+function createVideoWithAudio(imagePath, voicePath, musicPath, outputPath) {
+  console.log("Creating video with voice + music mix...");
   
-  var cmd = ffmpegPath + 
-    ' -loop 1 -i "' + imagePath + '"' +
-    ' -i "' + voicePath + '"' +
-    ' -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
+  var cmd = ffmpegPath;
+  
+  if (musicPath && fs.existsSync(musicPath)) {
+    // Mix voice + music
+    cmd += ' -loop 1 -i "' + imagePath + '"' +
+           ' -i "' + voicePath + '"' +
+           ' -i "' + musicPath + '"' +
+           ' -filter_complex "[1:a]volume=1.0[voice];[2:a]volume=0.3,afade=t=in:st=0:d=2[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=1[audio]"' +
+           ' -map 0:v:0 -map "[audio]"' +
+           ' -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
+  } else {
+    // Voice only (no music)
+    cmd += ' -loop 1 -i "' + imagePath + '"' +
+           ' -i "' + voicePath + '"' +
+           ' -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
+  }
   
   console.log("FFmpeg command: " + cmd.substring(0, 100) + "...");
   
   try {
-    var result = execSync(cmd, { encoding: 'utf8', stdio: 'pipe' });
+    var result = execSync(cmd, { encoding: 'utf8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 });
     console.log("✓ Video created successfully");
     
     if (!fs.existsSync(outputPath)) {
@@ -83,16 +95,17 @@ function createVideo(imagePath, voicePath, outputPath) {
   }
 }
 
-async function processVideo(jobId, voiceUrl, scenesInput, serverUrl) {
+async function processVideo(jobId, voiceUrl, musicUrl, scenesInput, serverUrl) {
   var tmpDir = path.join(__dirname, "tmp_" + jobId);
   fs.mkdirSync(tmpDir, { recursive: true });
   
   var voicePath = path.join(tmpDir, "voice.mp3");
+  var musicPath = path.join(tmpDir, "music.mp3");
   var imagePath = path.join(tmpDir, "image.jpg");
   var outputPath = path.join(OUTPUT_DIR, "final_" + jobId + ".mp4");
   
   try {
-    console.log("[" + jobId + "] Starting video generation");
+    console.log("[" + jobId + "] Starting video generation with audio mix");
     
     // Parse scenes
     var scenes = scenesInput;
@@ -108,9 +121,23 @@ async function processVideo(jobId, voiceUrl, scenesInput, serverUrl) {
     
     console.log("[" + jobId + "] Image: " + imageUrl.substring(0, 80));
     console.log("[" + jobId + "] Voice: " + voiceUrl.substring(0, 80));
+    if (musicUrl) console.log("[" + jobId + "] Music: " + musicUrl.substring(0, 80));
     
-    // Download files
+    // Download voice
     await getFile(voiceUrl, voicePath);
+    
+    // Download music if provided
+    if (musicUrl) {
+      try {
+        await getFile(musicUrl, musicPath);
+        console.log("[" + jobId + "] Music downloaded successfully");
+      } catch (musicErr) {
+        console.log("[" + jobId + "] Music download failed, continuing without music: " + musicErr.message);
+        musicPath = null;
+      }
+    }
+    
+    // Download image
     await getFile(imageUrl, imagePath);
     
     // Verify files exist
@@ -119,10 +146,12 @@ async function processVideo(jobId, voiceUrl, scenesInput, serverUrl) {
     
     var voiceSize = fs.statSync(voicePath).size;
     var imageSize = fs.statSync(imagePath).size;
-    console.log("[" + jobId + "] Files ready: voice=" + voiceSize + "B, image=" + imageSize + "B");
+    var musicSize = musicPath && fs.existsSync(musicPath) ? fs.statSync(musicPath).size : 0;
     
-    // Create video
-    createVideo(imagePath, voicePath, outputPath);
+    console.log("[" + jobId + "] Files ready: voice=" + voiceSize + "B, image=" + imageSize + "B, music=" + musicSize + "B");
+    
+    // Create video with audio mix
+    createVideoWithAudio(imagePath, voicePath, musicPath, outputPath);
     
     // Cleanup
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
@@ -145,7 +174,7 @@ async function processVideo(jobId, voiceUrl, scenesInput, serverUrl) {
 }
 
 app.get("/", function(req, res) {
-  res.json({ status: "kids-merger online", version: "14.0" });
+  res.json({ status: "kids-merger online", version: "15.0" });
 });
 
 app.get("/status/:jobId", function(req, res) {
@@ -158,6 +187,7 @@ app.get("/status/:jobId", function(req, res) {
 
 app.post("/merge", function(req, res) {
   var voiceUrl = req.body.voice_url;
+  var musicUrl = req.body.music_url;
   var scenesInput = req.body.scenes;
   
   if (!voiceUrl || !scenesInput) {
@@ -176,12 +206,12 @@ app.post("/merge", function(req, res) {
     status_url: serverUrl + "/status/" + jobId
   });
   
-  processVideo(jobId, voiceUrl, scenesInput, serverUrl);
+  processVideo(jobId, voiceUrl, musicUrl, scenesInput, serverUrl);
 });
 
 app.use("/outputs", express.static(OUTPUT_DIR));
 
 var PORT = process.env.PORT || 8080;
 app.listen(PORT, function() {
-  console.log("Kids Merger v14.0 running on port " + PORT);
+  console.log("Kids Merger v15.0 running on port " + PORT);
 });

@@ -79,8 +79,10 @@ async function assembleVideoWithAudio(videoPath, voicePath, outputPath) {
       .input(voicePath)
       .outputOptions([
         "-threads 1",
-        "-c:v copy",
-        "-c:a aac",
+        "-map 0:v:0",       // Explicitly map video track from input 0
+        "-map 1:a:0",       // Explicitly map audio track from input 1
+        "-c:v copy",        // Direct stream copy the video frames (instant, zero RAM overhead)
+        "-c:a aac",         // Cleanly encode the audio channel to AAC
         "-b:a 192k",
         "-y"
       ])

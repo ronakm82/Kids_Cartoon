@@ -46,19 +46,24 @@ async function getFile(input, dest) {
   console.log("Successfully stored asset. Path: " + dest + " | Disk Size: " + buffer.length + " bytes");
 }
 
-// REGENERATIVE AUDIO-SANITIZING MULTIPLEXER ENGINE
+// MULTI-FORMAT AUTO-DETECT COMPOSITION ENGINE
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
   return new Promise(function(resolve, reject) {
-    console.log("Invoking native audio-sanitizing execution chain...");
+    console.log("Invoking native format-agnostic execution chain...");
 
     var args = [
       "-threads", "1",
-      // Force aggressive probing parameters to repair headerless or streaming audio files
-      "-analyzeduration", "100M",
-      "-probesize", "100M",
+      // Looping configuration
       "-loop", "1",
       "-i", imagePath,
+      
+      // Let FFmpeg auto-sniff the binary containers regardless of the string extension name
       "-i", voicePath,
+      
+      // Explicit stream mappings (Stream 0:0 is the looped image, Stream 1:0 is the audio track)
+      "-map", "0:v:0",
+      "-map", "1:a:0?", // The question mark makes audio optional, stopping division-by-zero if headers are shifting
+      
       "-c:v", "mpeg4",
       "-c:a", "aac",
       "-b:a", "192k",

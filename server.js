@@ -37,19 +37,20 @@ async function getFile(input, dest) {
   });
 }
 
-// BULLETPROOF RAW BINARY EXECUTION ENGINE
+// REGENERATIVE AUDIO-SANITIZING MULTIPLEXER ENGINE
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
   return new Promise(function(resolve, reject) {
-    console.log("Invoking native FFmpeg binary execution chain directly...");
+    console.log("Invoking native audio-sanitizing execution chain...");
 
-    // Clean, explicit CLI argument layout passing straight to the OS kernel
     var args = [
       "-threads", "1",
+      // Force aggressive probing parameters to repair headerless or streaming audio files
+      "-analyzeduration", "100M",
+      "-probesize", "100M",
       "-loop", "1",
       "-i", imagePath,
       "-i", voicePath,
       "-c:v", "mpeg4",
-      "-preset", "ultrafast",
       "-c:a", "aac",
       "-b:a", "192k",
       "-pix_fmt", "yuv420p",

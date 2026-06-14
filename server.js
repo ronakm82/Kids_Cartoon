@@ -102,7 +102,9 @@ async function processVideo(jobId, voiceUrl, musicUrl, scenesInput, serverUrl) {
   var outputPath = path.join(OUTPUT_DIR, "final_" + jobId + ".mp4");
   
   try {
-    console.log("[" + jobId + "] Starting video generation with audio mix");
+    console.log("\n========================================");
+    console.log("[" + jobId + "] STARTING VIDEO GENERATION");
+    console.log("========================================");
     
     // Parse scenes
     var scenes = scenesInput;
@@ -116,56 +118,69 @@ async function processVideo(jobId, voiceUrl, musicUrl, scenesInput, serverUrl) {
     var imageUrl = scenes[0].imageUrl || scenes[0].url;
     if (!imageUrl) throw new Error("No image URL found");
     
-    console.log("[" + jobId + "] Image: " + imageUrl.substring(0, 80));
-    console.log("[" + jobId + "] Voice: " + voiceUrl.substring(0, 80));
-    if (musicUrl) console.log("[" + jobId + "] Music: " + musicUrl.substring(0, 80));
+    console.log("\n📥 INPUT URLS:");
+    console.log("Voice URL: " + voiceUrl);
+    console.log("Music URL: " + (musicUrl || "NONE"));
+    console.log("Image URL: " + imageUrl);
     
     // Download voice
+    console.log("\n⬇️  DOWNLOADING VOICE...");
     await getFile(voiceUrl, voicePath);
+    var voiceSize = fs.statSync(voicePath).size;
+    console.log("✓ Voice downloaded: " + voiceSize + " bytes");
     
     // Download music if provided
     if (musicUrl) {
+      console.log("\n⬇️  DOWNLOADING MUSIC...");
       try {
         await getFile(musicUrl, musicPath);
-        console.log("[" + jobId + "] Music downloaded successfully");
+        var musicSize = fs.statSync(musicPath).size;
+        console.log("✓ Music downloaded: " + musicSize + " bytes");
       } catch (musicErr) {
-        console.log("[" + jobId + "] Music download failed, continuing without music: " + musicErr.message);
+        console.log("⚠️  Music download failed: " + musicErr.message);
         musicPath = null;
       }
     }
     
     // Download image
+    console.log("\n⬇️  DOWNLOADING IMAGE...");
     await getFile(imageUrl, imagePath);
+    var imageSize = fs.statSync(imagePath).size;
+    console.log("✓ Image downloaded: " + imageSize + " bytes");
     
-    // Verify files exist
+    // Verify files
     if (!fs.existsSync(voicePath)) throw new Error("Voice file missing");
     if (!fs.existsSync(imagePath)) throw new Error("Image file missing");
     
-    var voiceSize = fs.statSync(voicePath).size;
-    var imageSize = fs.statSync(imagePath).size;
-    var musicSize = musicPath && fs.existsSync(musicPath) ? fs.statSync(musicPath).size : 0;
-    
-    console.log("[" + jobId + "] Files ready: voice=" + voiceSize + "B, image=" + imageSize + "B, music=" + musicSize + "B");
-    
-    // Create video with audio mix
+    // Create video
+    console.log("\n🎬 CREATING VIDEO...");
     createVideoWithAudio(imagePath, voicePath, musicPath, outputPath);
     
     // Cleanup
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
     
     var finalSize = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(2);
+    var finalVideoUrl = serverUrl + "/outputs/final_" + jobId + ".mp4";
+    
     saveJob(jobId, {
       status: "done",
-      final_video_url: serverUrl + "/outputs/final_" + jobId + ".mp4",
+      final_video_url: finalVideoUrl,
       file_size_mb: finalSize,
       job_id: jobId
     });
     
-    console.log("[" + jobId + "] ✓ COMPLETE - " + finalSize + " MB");
+    console.log("\n========================================");
+    console.log("✅ VIDEO GENERATION COMPLETE");
+    console.log("========================================");
+    console.log("\n📤 OUTPUT:");
+    console.log("Final Video URL: " + finalVideoUrl);
+    console.log("File Size: " + finalSize + " MB");
+    console.log("Job ID: " + jobId);
+    console.log("========================================\n");
     
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
-    console.error("[" + jobId + "] ✗ FAILED: " + err.message);
+    console.error("\n❌ FAILED: " + err.message + "\n");
     saveJob(jobId, { status: "failed", error: err.message, job_id: jobId });
   }
 }

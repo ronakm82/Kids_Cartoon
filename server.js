@@ -1,33 +1,15 @@
 var express = require("express");
 var fetch = require("node-fetch");
-var ffmpeg = require("fluent-ffmpeg");
 var ffmpegPath = require("@ffmpeg-installer/ffmpeg").path;
+var { execFile } = require("child_process");
 var fs = require("fs");
 var path = require("path");
-
-ffmpeg.setFfmpegPath(ffmpegPath);
 
 var app = express();
 app.use(express.json({ limit: "50mb" }));
 
 var OUTPUT_DIR = path.join(__dirname, "outputs");
 var JOBS_DIR = path.join(__dirname, "jobs");
-
-// Native helper to safely extract JPEG dimensions without external binary dependencies
-function getJpegDimensions(filePath) {
-  var b = fs.readFileSync(filePath);
-  var i = 4;
-  while (i < b.length) {
-    if (b[i] === 0xFF && (b[i+1] == 0xC0 || b[i+1] == 0xC2)) {
-      return {
-        height: (b[i+5] << 8) + b[i+6],
-        width: (b[i+7] << 8) + b[i+8]
-      };
-    }
-    i += (b[i+2] << 8) + b[i+3] + 2;
-  }
-  return { width: 1280, height: 720 }; // Safe widescreen fallback
-}
 
 [OUTPUT_DIR, JOBS_DIR].forEach(function(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -55,25 +37,34 @@ async function getFile(input, dest) {
   });
 }
 
-// THE ULTIMATE ZERO-FILTER, ZERO-ENCODE MULTIPLEXER ENGINE
+// BULLETPROOF RAW BINARY EXECUTION ENGINE
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
   return new Promise(function(resolve, reject) {
-    console.log("Executing pure hardware stream-copy multiplexer...");
-    ffmpeg()
-      .input(imagePath)
-      .inputOptions(["-loop 1", "-f image2"]) // Force native image stream reader
-      .input(voicePath)          
-      .outputOptions([
-        "-threads 1",            // Protect Railway memory limits
-        "-c:v copy",             // STREAM COPY THE VIDEO (Zero processing, completely immune to filter crashes!)
-        "-c:a aac",              // Cleanly encode the audio channel to safe AAC
-        "-b:a 192k",
-        "-shortest"              // Automatically cut the loop when the voice track ends
-      ])
-      .output(outputPath)
-      .on("end", resolve)
-      .on("error", reject)
-      .run();
+    console.log("Invoking native FFmpeg binary execution chain directly...");
+
+    // Clean, explicit CLI argument layout passing straight to the OS kernel
+    var args = [
+      "-threads", "1",
+      "-loop", "1",
+      "-i", imagePath,
+      "-i", voicePath,
+      "-c:v", "mpeg4",
+      "-preset", "ultrafast",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-pix_fmt", "yuv420p",
+      "-shortest",
+      "-y",
+      outputPath
+    ];
+
+    execFile(ffmpegPath, args, function(error, stdout, stderr) {
+      if (error) {
+        console.error("Native FFmpeg Error Logs:", stderr);
+        return reject(new Error(error.message));
+      }
+      resolve();
+    });
   });
 }
 
@@ -97,13 +88,11 @@ async function processVideo(jobId, voiceInput, scenesInput, serverUrl) {
       }
     }
     
-    // Fallback normalization logic
     if (!Array.isArray(scenes)) {
       if (scenes && (scenes.imageUrl || scenes.url)) { scenes = [scenes]; }
       else { throw new Error("Invalid scenes layout"); }
     }
 
-    // Grab the primary active image asset target
     var targetScene = scenes[0];
     var imageUrl = targetScene.imageUrl || targetScene.url;
 
@@ -118,10 +107,9 @@ async function processVideo(jobId, voiceInput, scenesInput, serverUrl) {
       await getFile(imageUrl, imagePath);
     }
 
-    console.log("[" + jobId + "] Running single-pass master composition build...");
+    console.log("[" + jobId + "] Running native single-pass master composition build...");
     await renderSingleSceneVideo(imagePath, voicePath, outputPath);
     
-    // Safe temporary filesystem flush
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
 
     var fileSizeMb = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(1);
@@ -141,7 +129,7 @@ async function processVideo(jobId, voiceInput, scenesInput, serverUrl) {
 }
 
 app.get("/", function(req, res) {
-  res.json({ status: "kids-merger-pro single-pass active", version: "11.0" });
+  res.json({ status: "kids-merger-pro raw binary mode active", version: "12.0" });
 });
 
 app.get("/status/:jobId", function(req, res) {
@@ -179,7 +167,7 @@ app.post("/merge", function(req, res) {
 
 app.use("/outputs", express.static(OUTPUT_DIR));
 
-var PORT = process.env.PORT || 8080; // Hardmatched directly to your active service port structure
+var PORT = process.env.PORT || 8080; 
 app.listen(PORT, function() {
-  console.log("Single-pass architecture online on port: " + PORT);
+  console.log("Raw Binary Architecture online on port: " + PORT);
 });

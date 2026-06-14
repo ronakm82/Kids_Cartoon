@@ -118,6 +118,7 @@ async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPat
         "-movflags faststart",
         "-y"
       ])
+      .output(outputPath) // <-- Restored the critical missing file output target!
       .on("end", resolve)
       .on("error", reject)
       .run();

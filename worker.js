@@ -101,12 +101,23 @@ async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPat
       .input(voicePath)
       .input(musicPath)
       .complexFilter([
-        "[1:a]aformat=sample_rates=44100[voice]",
-        "[2:a]volume=0.15,afade=t=in:st=0:d=2[music]",
+        // Resample and normalize the voice track layout safely
+        "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[voice]",
+        // Resample, normalize, drop the volume, and fade the music track smoothly
+        "[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=0.15,afade=t=in:st=0:d=2[music]",
+        // Mix the normalized streams safely without filter calculation crashes
         "[voice][music]amix=inputs=2:duration=first:dropout_transition=1[audio]"
       ])
-      .outputOptions(["-map 0:v:0", "-map [audio]", "-c:v copy", "-c:a aac", "-b:a 192k", "-shortest", "-movflags faststart", "-y"])
-      .output(outputPath)
+      .outputOptions([
+        "-map 0:v:0",
+        "-map [audio]",
+        "-c:v copy",
+        "-c:a aac",
+        "-b:a 192k",
+        "-shortest",
+        "-movflags faststart",
+        "-y"
+      ])
       .on("end", resolve)
       .on("error", reject)
       .run();

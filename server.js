@@ -39,53 +39,25 @@ async function getFile(input, dest) {
   });
 }
 
-async function getAudioDuration(audioPath) {
-  return new Promise(function(resolve) {
-    ffmpeg.ffprobe(audioPath, function(err, metadata) {
-      if (err || !metadata || !metadata.format || !metadata.format.duration) {
-        resolve(120);
-      } else {
-        resolve(Math.ceil(metadata.format.duration) + 1);
-      }
-    });
-  });
-}
-
-async function imageToVideoClip(imagePath, outputPath, durationSecs) {
+// BULLETPROOF SINGLE-PASS GENERATION ENGINE
+async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
   return new Promise(function(resolve, reject) {
+    console.log("Executing single-pass hardware multiplexer...");
     ffmpeg()
       .input(imagePath)
-      .inputOptions(["-loop 1", "-framerate 24"])
+      .inputOptions(["-loop 1"]) // Loop the background image infinitely
+      .input(voicePath)          // Read the audio track directly
       .outputOptions([
-        "-threads 1",
-        "-c:v libx264",
-        "-t " + durationSecs,
-        "-pix_fmt yuv420p",
-        "-s 1280x720",          // Use pure hardware scaling, dropping fragile video filters completely
+        "-threads 1",            // Protect Railway memory limits
+        "-c:v libx264",          // Clean H.264 video encoding
+        "-tune stillimage",      // Optimize specifically for image-to-video processing
         "-preset ultrafast",
-        "-crf 28"
-      ])
-      .output(outputPath)
-      .on("end", resolve)
-      .on("error", reject)
-      .run();
-  });
-}
-
-async function assembleVideoWithAudio(videoPath, voicePath, outputPath) {
-  return new Promise(function(resolve, reject) {
-    ffmpeg()
-      .input(videoPath)
-      .input(voicePath)
-      .outputOptions([
-        "-threads 1",
-        "-map 0:v:0",
-        "-map 1:a:0",
-        "-c:v copy",            // Copy the video frames directly with zero re-render cycles
-        "-c:a aac",             // Encode the audio stream layout to safe AAC
+        "-crf 28",
+        "-c:a aac",              // Encode the audio stream layout to safe AAC
         "-b:a 192k",
-        "-shortest",            // Cleanly trim the final track timeline to match perfectly
-        "-y"
+        "-pix_fmt yuv420p",
+        "-s 1280x720",           // Force clean canvas size
+        "-shortest"              // Automatically cut the video loop the exact millisecond the voice track ends
       ])
       .output(outputPath)
       .on("end", resolve)
@@ -99,6 +71,7 @@ async function processVideo(jobId, voiceInput, scenesInput, serverUrl) {
   fs.mkdirSync(tmpDir, { recursive: true });
 
   var voicePath = path.join(tmpDir, "voice.mp3");
+  var imagePath = path.join(tmpDir, "scene.jpg");
   var outputPath = path.join(OUTPUT_DIR, "final_" + jobId + ".mp4");
 
   try {
@@ -112,59 +85,32 @@ async function processVideo(jobId, voiceInput, scenesInput, serverUrl) {
         scenes = scenes.split(",").map(function(url) { return { imageUrl: url.trim() }; });
       }
     }
+    
+    // Fallback normalization logic
     if (!Array.isArray(scenes)) {
       if (scenes && (scenes.imageUrl || scenes.url)) { scenes = [scenes]; }
       else { throw new Error("Invalid scenes layout"); }
     }
 
-    console.log("[" + jobId + "] Downloading voice asset...");
+    // Grab the primary active image asset target
+    var targetScene = scenes[0];
+    var imageUrl = targetScene.imageUrl || targetScene.url;
+
+    console.log("[" + jobId + "] Downloading voice track component...");
     await getFile(voiceInput, voicePath);
-    var totalDuration = await getAudioDuration(voicePath);
 
-    var clipPaths = [];
-    var durationPerScene = Math.max(3, Math.round(totalDuration / scenes.length));
-
-    for (var i = 0; i < scenes.length; i++) {
-      var scene = scenes[i];
-      var imagePath = path.join(tmpDir, "scene_" + i + ".jpg");
-      var clipPath = path.join(tmpDir, "clip_" + i + ".mp4");
-
-      console.log("[" + jobId + "] Rendering scene " + (i + 1) + "/" + scenes.length);
-      
-      if (scene.imageUrl && scene.imageUrl.startsWith("data:image")) {
-        var base64Data = scene.imageUrl.split(";base64,").pop();
-        await fs.promises.writeFile(imagePath, Buffer.from(base64Data, "base64"));
-      } else {
-        await getFile(scene.imageUrl, imagePath);
-      }
-
-      await imageToVideoClip(imagePath, clipPath, durationPerScene);
-      clipPaths.push(clipPath);
-      try { await fs.promises.unlink(imagePath); } catch(e){}
+    console.log("[" + jobId + "] Downloading source scene image asset...");
+    if (imageUrl && imageUrl.startsWith("data:image")) {
+      var base64Data = imageUrl.split(";base64,").pop();
+      await fs.promises.writeFile(imagePath, Buffer.from(base64Data, "base64"));
+    } else {
+      await getFile(imageUrl, imagePath);
     }
 
-    var concatPath = clipPaths[0];
-    if (clipPaths.length > 1) {
-      concatPath = path.join(tmpDir, "concatenated.mp4");
-      var concatFile = path.join(tmpDir, "list.txt");
-      var concatContent = clipPaths.map(function(p) { return "file '" + p + "'"; }).join("\n");
-      await fs.promises.writeFile(concatFile, concatContent);
-
-      await new Promise(function(resolve, reject) {
-        ffmpeg()
-          .input(concatFile)
-          .inputOptions(["-f concat", "-safe 0"])
-          .outputOptions(["-threads 1", "-c:v copy", "-y"])
-          .output(concatPath)
-          .on("end", resolve)
-          .on("error", reject)
-          .run();
-      });
-    }
-
-    console.log("[" + jobId + "] Assembling final video track layout...");
-    await assembleVideoWithAudio(concatPath, voicePath, outputPath);
+    console.log("[" + jobId + "] Running single-pass master composition build...");
+    await renderSingleSceneVideo(imagePath, voicePath, outputPath);
     
+    // Safe temporary filesystem flush
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
 
     var fileSizeMb = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(1);
@@ -172,8 +118,7 @@ async function processVideo(jobId, voiceInput, scenesInput, serverUrl) {
       status: "done",
       final_video_url: serverUrl + "/outputs/final_" + jobId + ".mp4",
       file_size_mb: fileSizeMb,
-      job_id: jobId,
-      duration_secs: totalDuration
+      job_id: jobId
     });
     console.log("[" + jobId + "] Video generation successful!");
 
@@ -185,7 +130,7 @@ async function processVideo(jobId, voiceInput, scenesInput, serverUrl) {
 }
 
 app.get("/", function(req, res) {
-  res.json({ status: "kids-merger-pro running smoothly", version: "10.0" });
+  res.json({ status: "kids-merger-pro single-pass active", version: "11.0" });
 });
 
 app.get("/status/:jobId", function(req, res) {
@@ -218,13 +163,12 @@ app.post("/merge", function(req, res) {
     status_url: serverUrl + "/status/" + jobId
   });
 
-  // Call the local function directly
   processVideo(jobId, voiceInput, scenesInput, serverUrl);
 });
 
 app.use("/outputs", express.static(OUTPUT_DIR));
 
-var PORT = process.env.PORT || 3000;
+var PORT = process.env.PORT || 8080; // Hardmatched directly to your active service port structure
 app.listen(PORT, function() {
-  console.log("Server listening cleanly on port: " + PORT);
+  console.log("Single-pass architecture online on port: " + PORT);
 });

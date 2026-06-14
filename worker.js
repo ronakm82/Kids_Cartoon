@@ -1,3 +1,4 @@
+var express = require("express");
 var fetch = require("node-fetch");
 var ffmpeg = require("fluent-ffmpeg");
 var ffmpegPath = require("@ffmpeg-installer/ffmpeg").path;
@@ -6,8 +7,15 @@ var path = require("path");
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
+var app = express();
+app.use(express.json({ limit: "50mb" }));
+
 var OUTPUT_DIR = path.join(__dirname, "outputs");
 var JOBS_DIR = path.join(__dirname, "jobs");
+
+[OUTPUT_DIR, JOBS_DIR].forEach(function(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
 
 function saveJob(jobId, data) {
   try {
@@ -16,14 +24,12 @@ function saveJob(jobId, data) {
 }
 
 async function getFile(input, dest) {
-  if (!input) throw new Error("Empty input for: " + dest);
-  var inputStr = String(input).trim();
-  console.log("Downloading: " + inputStr.substring(0, 100));
-  var res = await fetch(inputStr, {
+  if (!input) throw new Error("Empty input URL");
+  var res = await fetch(String(input).trim(), {
     headers: { "User-Agent": "Mozilla/5.0 (KidsMerger/1.0)" },
     redirect: "follow"
   });
-  if (!res.ok) throw new Error("Download failed: " + inputStr.substring(0, 80) + " status: " + res.status);
+  if (!res.ok) throw new Error("Download failed status: " + res.status);
 
   return new Promise(function(resolve, reject) {
     var stream = fs.createWriteStream(dest);
@@ -51,13 +57,13 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs) {
       .input(imagePath)
       .inputOptions(["-loop 1", "-framerate 24"])
       .outputOptions([
-        "-threads 1",                 // Restrict to single-core execution to save server RAM
+        "-threads 1",
         "-c:v libx264",
         "-t " + durationSecs,
         "-pix_fmt yuv420p",
         "-vf scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
-        "-preset ultrafast",          // Maximum rendering speed to lower CPU limits
-        "-crf 28"                     // Efficient compression ratio
+        "-preset ultrafast",
+        "-crf 28"
       ])
       .output(outputPath)
       .on("end", resolve)
@@ -66,90 +72,30 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs) {
   });
 }
 
-async function concatenateClips(clipPaths, outputPath) {
-  if (clipPaths.length === 1) {
-    // Non-blocking async file copy
-    fs.promises.copyFile(clipPaths[0], outputPath).then(resolve).catch(reject);
-    return;
-  }
-  var concatFile = outputPath.replace(/\.mp4$/, "_concat.txt");
-  var concatContent = clipPaths.map(function(p) { return "file '" + p + "'"; }).join("\n");
-  
-  await fs.promises.writeFile(concatFile, concatContent);
-
+async function assembleVideoWithAudio(videoPath, voicePath, outputPath) {
   return new Promise(function(resolve, reject) {
-    ffmpeg()
-      .input(concatFile)
-      .inputOptions(["-f concat", "-safe 0"])
-      .outputOptions(["-threads 1", "-c:v libx264", "-pix_fmt yuv420p", "-preset ultrafast", "-crf 28"])
-      .output(outputPath)
-      .on("end", async function() {
-        try { await fs.promises.unlink(concatFile); } catch(e){}
-        resolve();
-      })
-      .on("error", async function(err) {
-        try { await fs.promises.unlink(concatFile); } catch(e){}
-        reject(err);
-      })
-      .run();
-  });
-}
-
-async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPath) {
-  return new Promise(function(resolve, reject) {
-    console.log("Executing reliable multi-track audio layout assembly...");
-    
     ffmpeg()
       .input(videoPath)
       .input(voicePath)
-      .input(musicPath)
       .outputOptions([
         "-threads 1",
-        "-map 0:v:0",
-        "-map 1:a:0",
-        "-c:v copy",                  // Direct stream copy (ultra lightweight, no rendering)
+        "-c:v copy",
         "-c:a aac",
         "-b:a 192k",
-        "-shortest",
-        "-movflags faststart",
         "-y"
       ])
       .output(outputPath)
-      .on("end", function() {
-        console.log("Core video assembly completed perfectly with background music track.");
-        resolve();
-      })
-      .on("error", function(err) {
-        console.log("Music track mapping failed. Running fallback stream multiplex pipeline...");
-        
-        ffmpeg()
-          .input(videoPath)
-          .input(voicePath)
-          .outputOptions([
-            "-threads 1",
-            "-c:v copy",
-            "-c:a aac",
-            "-b:a 192k",
-            "-y"
-          ])
-          .output(outputPath)
-          .on("end", function() {
-            console.log("Failsafe complete: Video saved with pure voiceover track layout.");
-            resolve();
-          })
-          .on("error", reject)
-          .run();
-      })
+      .on("end", resolve)
+      .on("error", reject)
       .run();
   });
 }
 
-async function processVideo(jobId, voiceInput, musicInput, scenesInput, serverUrl) {
+async function processVideo(jobId, voiceInput, scenesInput, serverUrl) {
   var tmpDir = path.join(__dirname, "tmp_" + jobId);
   fs.mkdirSync(tmpDir, { recursive: true });
 
   var voicePath = path.join(tmpDir, "voice.mp3");
-  var musicPath = path.join(tmpDir, "music.mp3");
   var outputPath = path.join(OUTPUT_DIR, "final_" + jobId + ".mp4");
 
   try {
@@ -165,52 +111,57 @@ async function processVideo(jobId, voiceInput, musicInput, scenesInput, serverUr
     }
     if (!Array.isArray(scenes)) {
       if (scenes && (scenes.imageUrl || scenes.url)) { scenes = [scenes]; }
-      else { throw new Error("Invalid scenes array profile layout format"); }
+      else { throw new Error("Invalid scenes layout"); }
     }
 
-    console.log("[" + jobId + "] Downloading assets for " + scenes.length + " scenes...");
+    console.log("[" + jobId + "] Downloading voice asset...");
     await getFile(voiceInput, voicePath);
     var totalDuration = await getAudioDuration(voicePath);
 
-    var totalChars = scenes.reduce(function(sum, s) { return sum + (s.characterCount || s.estimatedDuration * 20 || 100); }, 0);
-    var sceneDurations = scenes.map(function(scene) {
-      var ratio = (scene.characterCount || scene.estimatedDuration * 20 || 100) / totalChars;
-      return Math.max(3, Math.round(ratio * totalDuration));
-    });
-
-    var sumDurations = sceneDurations.reduce(function(a, b) { return a + b; }, 0);
-    if (sumDurations !== totalDuration) sceneDurations[sceneDurations.length - 1] += (totalDuration - sumDurations);
-
     var clipPaths = [];
+    var durationPerScene = Math.max(3, Math.round(totalDuration / scenes.length));
+
     for (var i = 0; i < scenes.length; i++) {
       var scene = scenes[i];
-      var duration = sceneDurations[i];
       var imagePath = path.join(tmpDir, "scene_" + i + ".jpg");
       var clipPath = path.join(tmpDir, "clip_" + i + ".mp4");
 
+      console.log("[" + jobId + "] Rendering scene " + (i + 1) + "/" + scenes.length);
+      
       if (scene.imageUrl && scene.imageUrl.startsWith("data:image")) {
         var base64Data = scene.imageUrl.split(";base64,").pop();
-        // Converted to non-blocking async file writer
         await fs.promises.writeFile(imagePath, Buffer.from(base64Data, "base64"));
       } else {
         await getFile(scene.imageUrl, imagePath);
       }
 
-      await imageToVideoClip(imagePath, clipPath, duration);
+      await imageToVideoClip(imagePath, clipPath, durationPerScene);
       clipPaths.push(clipPath);
-      
       try { await fs.promises.unlink(imagePath); } catch(e){}
     }
 
-    var concatPath = path.join(tmpDir, "concatenated.mp4");
-    await concatenateClips(clipPaths, concatPath);
+    var concatPath = clipPaths[0]; // If 1 scene, use it directly.
+    if (clipPaths.length > 1) {
+      concatPath = path.join(tmpDir, "concatenated.mp4");
+      var concatFile = path.join(tmpDir, "list.txt");
+      var concatContent = clipPaths.map(function(p) { return "file '" + p + "'"; }).join("\n");
+      await fs.promises.writeFile(concatFile, concatContent);
 
-    var musicUrl = musicInput || "https://files.freemusicarchive.org/storage-freemusicarchive-org/music/WFMU/Broke_For_Free/Directionless_EP/Broke_For_Free_-_01_-_Night_Owl.mp3";
-    await getFile(musicUrl, musicPath);
+      await new Promise(function(resolve, reject) {
+        ffmpeg()
+          .input(concatFile)
+          .inputOptions(["-f concat", "-safe 0"])
+          .outputOptions(["-threads 1", "-c:v copy", "-y"])
+          .output(concatPath)
+          .on("end", resolve)
+          .on("error", reject)
+          .run();
+      });
+    }
 
-    await assembleVideoWithAudio(concatPath, voicePath, musicPath, outputPath);
+    console.log("[" + jobId + "] Assembling final video track layout...");
+    await assembleVideoWithAudio(concatPath, voicePath, outputPath);
     
-    // Clean up directory safely
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
 
     var fileSizeMb = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(1);
@@ -219,16 +170,55 @@ async function processVideo(jobId, voiceInput, musicInput, scenesInput, serverUr
       final_video_url: serverUrl + "/outputs/final_" + jobId + ".mp4",
       file_size_mb: fileSizeMb,
       job_id: jobId,
-      duration_secs: totalDuration,
-      completed: Date.now()
+      duration_secs: totalDuration
     });
-    console.log("[" + jobId + "] Saved final composition render perfectly.");
+    console.log("[" + jobId + "] Video generation successful!");
 
   } catch (err) {
     try { if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
-    console.error("[" + jobId + "] Failed processing task: " + err.message);
+    console.error("[" + jobId + "] Processing failed: " + err.message);
     saveJob(jobId, { status: "failed", error: err.message, job_id: jobId });
   }
 }
 
-module.exports = { processVideo };
+app.get("/", function(req, res) {
+  res.json({ status: "kids-merger-pro running smoothly", version: "10.0" });
+});
+
+app.get("/status/:jobId", function(req, res) {
+  try {
+    var f = path.join(JOBS_DIR, req.params.jobId + ".json");
+    if (!fs.existsSync(f)) return res.status(404).json({ error: "Job not found" });
+    res.json(JSON.parse(fs.readFileSync(f, "utf8")));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/merge", function(req, res) {
+  var voiceInput = req.body.voice_url;
+  var scenesInput = req.body.scenes;
+
+  if (!voiceInput || !scenesInput) {
+    return res.status(400).json({ error: "Missing required voice_url or scenes" });
+  }
+
+  var jobId = Date.now() + "_" + Math.random().toString(36).substr(2, 6);
+  var serverUrl = process.env.RAILWAY_STATIC_URL || "kidscartoon-production.up.railway.app";
+  if (serverUrl.indexOf("http") !== 0) serverUrl = "https://" + serverUrl;
+
+  try {
+    fs.writeFileSync(path.join(JOBS_DIR, jobId + ".json"), JSON.stringify({ status: "processing", started: Date.now() }));
+  } catch(e){}
+
+  res.json({
+    status: "processing",
+    job_id: jobId,
+    status_url: serverUrl + "/status/" + jobId
+  });
+
+  processVideo(jobId, voiceInput, scenesInput, serverUrl);
+});
+
+app.use("/outputs", express.static(OUTPUT_DIR));
+
+var PORT = process.env.PORT || 3000;
+app

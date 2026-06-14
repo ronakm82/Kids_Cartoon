@@ -39,24 +39,27 @@ async function getFile(input, dest) {
   });
 }
 
-// BULLETPROOF SINGLE-PASS GENERATION ENGINE
 // UNIVERSALLY COMPATIBLE SINGLE-PASS ENGINE
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
   return new Promise(function(resolve, reject) {
     console.log("Executing single-pass universal hardware multiplexer...");
     ffmpeg()
       .input(imagePath)
-      .inputOptions(["-loop 1"]) // Loop the background image infinitely
+      .inputOptions([
+        "-loop 1", 
+        // Force the input image dimensions to automatically round to the nearest 
+        // even numbers natively, stopping the implicit filter graph crashes for good.
+        "-vf scale='bitand(iw,2)*-1+iw':'bitand(ih,2)*-1+ih'"
+      ]) 
       .input(voicePath)          // Read the audio track directly
       .outputOptions([
         "-threads 1",            // Protect Railway memory limits
-        "-c:v mpeg4",            // Switch from libx264 to the universally built-in mpeg4 encoder
+        "-c:v mpeg4",            // Built-in universal encoder
         "-preset ultrafast",     // Render instantly
         "-c:a aac",              // Encode the audio stream layout to safe AAC
         "-b:a 192k",
-        "-pix_fmt yuv420p",      // Ensures it plays perfectly on iPhones/Web players
-        "-s 1280x720",           // Force clean canvas size
-        "-shortest"              // Automatically cut the video loop the exact millisecond the voice track ends
+        "-pix_fmt yuv420p",      // High web compatibility layout
+        "-shortest"              // Cut cleanly when the voice track ends
       ])
       .output(outputPath)
       .on("end", resolve)

@@ -54,36 +54,40 @@ async function getFile(input, dest) {
 }
 
 function createVideoWithAudio(imagePath, voicePath, musicPath, outputPath) {
-  console.log("Creating video with voice + music mix...");
+  console.log("Creating video with mixed audio...");
   
-  var cmd = ffmpegPath;
+  var cmd;
   
   if (musicPath && fs.existsSync(musicPath)) {
-    // Mix voice + music properly
-    cmd += ' -loop 1 -i "' + imagePath + '"' +
-           ' -i "' + voicePath + '"' +
-           ' -i "' + musicPath + '"' +
-           ' -filter_complex "[1:a]volume=1.2[voice];[2:a]volume=0.4[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[audio]"' +
-           ' -map 0:v -map "[audio]"' +
-           ' -c:v libx264 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
+    // Use simple concat approach
+    cmd = ffmpegPath + 
+      ' -loop 1 -i "' + imagePath + '"' +
+      ' -i "' + voicePath + '"' +
+      ' -i "' + musicPath + '"' +
+      ' -filter_complex ' +
+      '"[1:a]aformat=sample_rates=44100:channel_layouts=stereo[v1];' +
+      '[2:a]aformat=sample_rates=44100:channel_layouts=stereo[v2];' +
+      '[v1][v2]amix=inputs=2:duration=first[aout]"' +
+      ' -map 0:v:0 -map "[aout]"' +
+      ' -c:v libx264 -c:a libmp3lame -b:a 128k -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
   } else {
-    cmd += ' -loop 1 -i "' + imagePath + '"' +
-           ' -i "' + voicePath + '"' +
-           ' -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
+    cmd = ffmpegPath + 
+      ' -loop 1 -i "' + imagePath + '"' +
+      ' -i "' + voicePath + '"' +
+      ' -c:v libx264 -c:a libmp3lame -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
   }
   
-  console.log("FFmpeg mixing audio tracks...");
+  console.log("Encoding with audio mix...");
   
   try {
-    execSync(cmd, { encoding: 'utf8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 });
-    console.log("✓ Video created with mixed audio");
+    execSync(cmd, { stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 });
     
-    if (!fs.existsSync(outputPath)) throw new Error("Output not created");
+    if (!fs.existsSync(outputPath)) throw new Error("Output failed");
     var size = fs.statSync(outputPath).size;
-    console.log("✓ Output: " + (size / 1024 / 1024).toFixed(2) + " MB");
+    console.log("✓ Complete: " + (size / 1024 / 1024).toFixed(2) + " MB");
     
   } catch (err) {
-    console.error("FFmpeg error: " + err.message);
+    console.error("Error: " + err.message);
     throw err;
   }
 }

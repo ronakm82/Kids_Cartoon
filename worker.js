@@ -118,29 +118,27 @@ async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPat
         resolve();
       })
       .on("error", function(err) {
-        console.log("Music track mapping failed. Initiating true 2-input voice fallback pipeline...");
+        console.log("Music track mapping failed. Initiating standard 2-input stream multiplex pipeline...");
         
-        // ULTIMATE FALLBACK: Completely strip input 3 (music) out of the engine definitions
+        // FOOLPROOF MULTIPLEXER FALLBACK:
+        // Strip away custom tracking maps and flags completely. Let FFmpeg naturally
+        // layer input 0 (video) and input 1 (audio) together onto the final output profile path.
         ffmpeg()
           .input(videoPath)
           .input(voicePath)
           .outputOptions([
-            "-map 0:v:0",             // Input 0 Video
-            "-map 1:a:0",             // Input 1 Voiceover
-            "-c:v copy",
-            "-c:a aac",
+            "-c:v copy",              // Passthrough the clean video clip
+            "-c:a aac",               // Cleanly encode the audio channel
             "-b:a 192k",
-            "-shortest",
-            "-movflags faststart",
             "-y"
           ])
           .output(outputPath)
           .on("end", function() {
-            console.log("Failsafe complete: Video saved cleanly with pure voice track over clips.");
+            console.log("Failsafe complete: Video saved with pure voiceover track layout.");
             resolve();
           })
           .on("error", function(fallbackErr) {
-            console.error("Critical fallback pipeline error: " + fallbackErr.message);
+            console.error("Failsafe pipeline multiplexer failed: " + fallbackErr.message);
             reject(fallbackErr);
           })
           .run();

@@ -21,9 +21,24 @@ function saveJob(jobId, data) {
   } catch (e) { console.log("saveJob error: " + e.message); }
 }
 
-async function downloadFile(url, filepath) {
-  console.log("Downloading: " + url.substring(0, 80));
-  var res = await fetch(String(url).trim(), {
+async function getFile(input, dest) {
+  var inputStr = String(input).trim();
+  
+  // Handle base64 data URLs (from ElevenLabs, etc)
+  if (inputStr.startsWith('data:')) {
+    console.log("Detecting base64 data URL");
+    var base64Data = inputStr.split(',')[1];
+    if (!base64Data) throw new Error("Invalid data URL");
+    
+    var buffer = Buffer.from(base64Data, 'base64');
+    fs.writeFileSync(dest, buffer);
+    console.log("✓ Saved base64 data: " + dest + " (" + buffer.length + " bytes)");
+    return;
+  }
+  
+  // Handle HTTP/HTTPS URLs
+  console.log("Downloading: " + inputStr.substring(0, 80));
+  var res = await fetch(inputStr, {
     headers: { "User-Agent": "Mozilla/5.0" },
     redirect: "follow",
     timeout: 30000
@@ -34,14 +49,13 @@ async function downloadFile(url, filepath) {
   var buffer = await res.buffer();
   if (buffer.length < 100) throw new Error("Downloaded file too small: " + buffer.length + " bytes");
   
-  fs.writeFileSync(filepath, buffer);
-  console.log("✓ Saved: " + path.basename(filepath) + " (" + buffer.length + " bytes)");
+  fs.writeFileSync(dest, buffer);
+  console.log("✓ Saved: " + path.basename(dest) + " (" + buffer.length + " bytes)");
 }
 
 function createVideo(imagePath, voicePath, outputPath) {
   console.log("Creating video...");
   
-  // Build FFmpeg command as string for maximum compatibility
   var cmd = ffmpegPath + 
     ' -loop 1 -i "' + imagePath + '"' +
     ' -i "' + voicePath + '"' +
@@ -96,8 +110,8 @@ async function processVideo(jobId, voiceUrl, scenesInput, serverUrl) {
     console.log("[" + jobId + "] Voice: " + voiceUrl.substring(0, 80));
     
     // Download files
-    await downloadFile(voiceUrl, voicePath);
-    await downloadFile(imageUrl, imagePath);
+    await getFile(voiceUrl, voicePath);
+    await getFile(imageUrl, imagePath);
     
     // Verify files exist
     if (!fs.existsSync(voicePath)) throw new Error("Voice file missing");
@@ -131,7 +145,7 @@ async function processVideo(jobId, voiceUrl, scenesInput, serverUrl) {
 }
 
 app.get("/", function(req, res) {
-  res.json({ status: "kids-merger online", version: "13.0" });
+  res.json({ status: "kids-merger online", version: "14.0" });
 });
 
 app.get("/status/:jobId", function(req, res) {
@@ -169,5 +183,5 @@ app.use("/outputs", express.static(OUTPUT_DIR));
 
 var PORT = process.env.PORT || 8080;
 app.listen(PORT, function() {
-  console.log("Kids Merger v13.0 running on port " + PORT);
+  console.log("Kids Merger v14.0 running on port " + PORT);
 });

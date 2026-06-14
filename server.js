@@ -29,17 +29,21 @@ async function getFile(input, dest) {
   });
   if (!res.ok) throw new Error("Download failed status: " + res.status);
 
-  // Read the raw buffer to inspect it safely before saving it to disk
   var buffer = await res.buffer();
   
-  // Sneak peek at the first few bytes. If it looks like a JSON object or string text...
-  var sampleText = buffer.slice(0, 200).toString("utf8").trim();
-  if (sampleText.startsWith("{") || sampleText.startsWith("[") || sampleText.toLowerCase().includes("detail") || sampleText.toLowerCase().includes("error")) {
-    throw new Error("Upstream API Error Caught! The URL did not provide audio. API Message: " + sampleText);
+  // 1. Check if the file is completely empty or structurally useless
+  if (buffer.length === 0) {
+    throw new Error("The URL returned an empty (0-byte) payload! Verify your upstream file generation step.");
   }
 
-  // If it's valid binary media data, write the clean buffer straight down
+  // 2. Catch plain text errors masquerading as binary media files
+  var sampleText = buffer.slice(0, 200).toString("utf8").trim();
+  if (sampleText.startsWith("{") || sampleText.startsWith("[") || sampleText.toLowerCase().includes("detail")) {
+    throw new Error("Upstream API Error Caught! Payload data: " + sampleText);
+  }
+
   fs.writeFileSync(dest, buffer);
+  console.log("Successfully stored asset. Path: " + dest + " | Disk Size: " + buffer.length + " bytes");
 }
 
 // REGENERATIVE AUDIO-SANITIZING MULTIPLEXER ENGINE

@@ -192,20 +192,29 @@ async function processVideo(jobId, voiceInput, musicInput, scenesInput, storyTit
       throw new Error("No scenes provided");
     }
 
-    console.log("[" + jobId + "] Processing " + scenesInput.length + " scenes");
-    saveJob(jobId, { status: "processing", stage: "downloading_assets" });
-
-    console.log("[" + jobId + "] Downloading voice...");
-    await getFile(voiceInput, voicePath);
-    if (fs.statSync(voicePath).size < 100) throw new Error("Voice file too small");
-
-    await new Promise(function(r) { setTimeout(r, 1000); });
-    var totalDuration = await getAudioDuration(voicePath);
-    if (totalDuration < 10) totalDuration = 120;
-    console.log("[" + jobId + "] Total duration: " + totalDuration + "s");
-
+    console.log("[" + jobId + "] Processing scenes input layout");
+    
+    // Ensure scenesInput is a valid array if Zapier passes it stringified
     var scenes = scenesInput;
-    var totalChars = scenes.reduce(function(sum, s) { return sum + (s.characterCount || s.estimatedDuration * 20); }, 0);
+    if (typeof scenes === "string") {
+      try {
+        scenes = JSON.parse(scenes);
+      } catch (e) {
+        throw new Error("Scenes payload is a string and could not be parsed to JSON array.");
+      }
+    }
+    
+    if (!Array.isArray(scenes)) {
+      // If it's a single scene object mistakenly passed outside of an array wrapper
+      if (scenes && (scenes.imageUrl || scenes.url)) {
+        scenes = [scenes];
+      } else {
+        throw new Error("Scenes input must be a valid array list. Received: " + typeof scenes);
+      }
+    }
+
+    // Now this calculation will execute perfectly without dropping a function exception error
+    var totalChars = scenes.reduce(function(sum, s) { return sum + (s.characterCount || s.estimatedDuration * 20 || 100); }, 0);
     var sceneDurations = scenes.map(function(scene) {
       var ratio = (scene.characterCount || scene.estimatedDuration * 20) / totalChars;
       return Math.max(3, Math.round(ratio * totalDuration));

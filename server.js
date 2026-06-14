@@ -54,40 +54,36 @@ async function getFile(input, dest) {
 }
 
 function createVideoWithAudio(imagePath, voicePath, musicPath, outputPath) {
-  console.log("Creating video with voice + music...");
+  console.log("Creating video with voice + music mix...");
   
   var cmd = ffmpegPath;
   
   if (musicPath && fs.existsSync(musicPath)) {
-    // Proper audio mixing syntax
+    // Mix voice + music properly
     cmd += ' -loop 1 -i "' + imagePath + '"' +
            ' -i "' + voicePath + '"' +
            ' -i "' + musicPath + '"' +
-           ' -filter_complex "' +
-           '[1]volume=1.0[voice];' +
-           '[2]volume=0.5[music];' +
-           '[voice][music]amix=inputs=2:duration=first:dropout_transition=3[out]' +
-           '"' +
-           ' -map 0:v:0 -map "[out]"' +
-           ' -c:v libx264 -c:a aac -b:a 192k -ar 44100 -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
+           ' -filter_complex "[1:a]volume=1.2[voice];[2:a]volume=0.4[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[audio]"' +
+           ' -map 0:v -map "[audio]"' +
+           ' -c:v libx264 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
   } else {
     cmd += ' -loop 1 -i "' + imagePath + '"' +
            ' -i "' + voicePath + '"' +
            ' -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
   }
   
-  console.log("Running FFmpeg audio mix...");
+  console.log("FFmpeg mixing audio tracks...");
   
   try {
     execSync(cmd, { encoding: 'utf8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 });
-    console.log("✓ Video created with audio mix");
+    console.log("✓ Video created with mixed audio");
     
     if (!fs.existsSync(outputPath)) throw new Error("Output not created");
     var size = fs.statSync(outputPath).size;
     console.log("✓ Output: " + (size / 1024 / 1024).toFixed(2) + " MB");
     
   } catch (err) {
-    console.error("FFmpeg failed: " + err.message);
+    console.error("FFmpeg error: " + err.message);
     throw err;
   }
 }

@@ -54,7 +54,9 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs) {
         "-c:v libx264",
         "-t " + durationSecs,
         "-pix_fmt yuv420p",
-        "-vf scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black",
+        // Stable, bulletproof scaling filter that expands to fill standard 1280x720 layout 
+        // without complex padding math variables breaking down
+        "-vf scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
         "-preset faster",
         "-crf 22"
       ])
@@ -75,12 +77,10 @@ async function concatenateClips(clipPaths, outputPath) {
   fs.writeFileSync(concatFile, concatContent);
 
   return new Promise(function(resolve, reject) {
-    var fadeIndex = Math.max(0, clipPaths.length - 1);
     ffmpeg()
       .input(concatFile)
       .inputOptions(["-f concat", "-safe 0"])
-      .videoFilters("[0:v]fade=t=out:st=" + fadeIndex + ":d=0.5[v]")
-      .outputOptions(["-c:v libx264", "-pix_fmt yuv420p", "-map [v]", "-preset faster", "-crf 22"])
+      .outputOptions(["-c:v libx264", "-pix_fmt yuv420p", "-preset faster", "-crf 22"])
       .output(outputPath)
       .on("end", function() {
         if (fs.existsSync(concatFile)) fs.unlinkSync(concatFile);
@@ -103,12 +103,12 @@ async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPat
       .input(voicePath)
       .input(musicPath)
       .outputOptions([
-        "-map 0:v:0",                 // Video track from input 0
-        "-map 1:a:0",                 // Voiceover track from input 1
-        "-c:v copy",                  // Copy video codec directly
-        "-c:a aac",                   // Encode audio to AAC
+        "-map 0:v:0",
+        "-map 1:a:0",
+        "-c:v copy",
+        "-c:a aac",
         "-b:a 192k",
-        "-shortest",                  // Clip to match shortest timeline
+        "-shortest",
         "-movflags faststart",
         "-y"
       ])
@@ -120,15 +120,12 @@ async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPat
       .on("error", function(err) {
         console.log("Music track mapping failed. Initiating standard 2-input stream multiplex pipeline...");
         
-        // FOOLPROOF MULTIPLEXER FALLBACK:
-        // Strip away custom tracking maps and flags completely. Let FFmpeg naturally
-        // layer input 0 (video) and input 1 (audio) together onto the final output profile path.
         ffmpeg()
           .input(videoPath)
           .input(voicePath)
           .outputOptions([
-            "-c:v copy",              // Passthrough the clean video clip
-            "-c:a aac",               // Cleanly encode the audio channel
+            "-c:v copy",
+            "-c:a aac",
             "-b:a 192k",
             "-y"
           ])
@@ -215,19 +212,4 @@ async function processVideo(jobId, voiceInput, musicInput, scenesInput, serverUr
     var fileSizeMb = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(1);
     saveJob(jobId, {
       status: "done",
-      final_video_url: serverUrl + "/outputs/final_" + jobId + ".mp4",
-      file_size_mb: fileSizeMb,
-      job_id: jobId,
-      duration_secs: totalDuration,
-      completed: Date.now()
-    });
-    console.log("[" + jobId + "] Saved final composition render perfectly.");
-
-  } catch (err) {
-    if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
-    console.error("[" + jobId + "] Failed processing task: " + err.message);
-    saveJob(jobId, { status: "failed", error: err.message, job_id: jobId });
-  }
-}
-
-module.exports = { processVideo };
+      final_video_url: serverUrl + "/outputs/final_" + jobId +

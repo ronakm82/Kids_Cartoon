@@ -51,14 +51,13 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs) {
       .input(imagePath)
       .inputOptions(["-loop 1", "-framerate 24"])
       .outputOptions([
+        "-threads 1",                 // Force FFmpeg to use exactly 1 thread to prevent memory spikes
         "-c:v libx264",
         "-t " + durationSecs,
         "-pix_fmt yuv420p",
-        // Stable, bulletproof scaling filter that expands to fill standard 1280x720 layout 
-        // without complex padding math variables breaking down
         "-vf scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
-        "-preset faster",
-        "-crf 22"
+        "-preset ultrafast",          // Changed from 'faster' to 'ultrafast' to cut RAM usage and process instantly
+        "-crf 28"                     // Slightly lower quality profile to dramatically optimize memory footprints
       ])
       .output(outputPath)
       .on("end", resolve)

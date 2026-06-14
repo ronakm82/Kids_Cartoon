@@ -46,28 +46,35 @@ async function getFile(input, dest) {
   console.log("Successfully stored asset. Path: " + dest + " | Disk Size: " + buffer.length + " bytes");
 }
 
-// MULTI-FORMAT AUTO-DETECT COMPOSITION ENGINE
+// FORMAT-AGNOSTIC SYNCHRONIZED COMPOSITION ENGINE
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
   return new Promise(function(resolve, reject) {
     console.log("Invoking native format-agnostic execution chain...");
 
     var args = [
       "-threads", "1",
-      // Looping configuration
+      
+      // Forces FFmpeg to read the image as a standard, loopable video sequence frame layout
+      "-f", "image2",
+      "-framerate", "24",
       "-loop", "1",
       "-i", imagePath,
       
-      // Let FFmpeg auto-sniff the binary containers regardless of the string extension name
+      // Read the raw voice track asset
       "-i", voicePath,
       
-      // Explicit stream mappings (Stream 0:0 is the looped image, Stream 1:0 is the audio track)
+      // Strict layout stream mapping
       "-map", "0:v:0",
-      "-map", "1:a:0?", // The question mark makes audio optional, stopping division-by-zero if headers are shifting
+      "-map", "1:a:0?",
       
+      // Universal codecs
       "-c:v", "mpeg4",
       "-c:a", "aac",
       "-b:a", "192k",
       "-pix_fmt", "yuv420p",
+      
+      // Stop rendering the absolute millisecond the audio input hits EOF (End of File)
+      "-fflags", "+genpts", // Automatically rebuild missing presentation timestamps on the fly
       "-shortest",
       "-y",
       outputPath

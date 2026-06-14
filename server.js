@@ -55,33 +55,24 @@ async function getFile(input, dest) {
   });
 }
 
-// PURE STREAM MULTIPLEXER ENGINE — NO FILTER GRAPHS
+// PURE STREAM MULTIPLEXER ENGINE — ZERO FILTERS, ZERO EXTRA OPTIONS
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
   var dims = { width: 1280, height: 720 };
   try { dims = getJpegDimensions(imagePath); } catch(e) { console.log("Dimension read fallback applied"); }
 
-  // Force mathematical even constraints via standard JavaScript bitwise math
-  var evenWidth = dims.width & ~1;
-  var evenHeight = dims.height & ~1;
-
-  console.log("Processing safe multiplex bounds: " + evenWidth + "x" + evenHeight);
-
   return new Promise(function(resolve, reject) {
     ffmpeg()
       .input(imagePath)
-      .inputOptions(["-loop 1"]) 
+      .inputOptions(["-loop 1", "-framerate 24"]) 
       .input(voicePath)          
       .outputOptions([
-        "-threads 1",            
-        "-c:v mpeg4",            
-        "-preset ultrafast",     
-        "-c:a aac",              
+        "-threads 1",            // Protect Railway memory limits
+        "-c:v mpeg4",            // Universally built-in encoder
+        "-preset ultrafast",     // Render instantly
+        "-c:a aac",              // Encode the audio stream layout to safe AAC
         "-b:a 192k",
-        "-pix_fmt yuv420p",      
-        "-wscale", "exact",
-        // Pass standard, un-failable raw crop dimensions instead of an active filter graph array
-        "-cropopt", "w=" + evenWidth + ":h=" + evenHeight + ":x=0:y=0",
-        "-shortest"              
+        "-pix_fmt yuv420p",      // High web compatibility layout
+        "-shortest"              // Cut cleanly when the voice track ends
       ])
       .output(outputPath)
       .on("end", resolve)

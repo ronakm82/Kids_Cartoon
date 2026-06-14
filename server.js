@@ -29,19 +29,17 @@ async function getFile(input, dest) {
   });
   if (!res.ok) throw new Error("Download failed status: " + res.status);
 
-  // SANITY CHECK: Catch text/API errors masquerading as MP3s
-  var contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("json") || contentType.includes("text") || contentType.includes("html")) {
-    var textBody = await res.text();
-    throw new Error("Expected an audio file stream but received text/payload data instead! Content: " + textBody.substring(0, 300));
+  // Read the raw buffer to inspect it safely before saving it to disk
+  var buffer = await res.buffer();
+  
+  // Sneak peek at the first few bytes. If it looks like a JSON object or string text...
+  var sampleText = buffer.slice(0, 200).toString("utf8").trim();
+  if (sampleText.startsWith("{") || sampleText.startsWith("[") || sampleText.toLowerCase().includes("detail") || sampleText.toLowerCase().includes("error")) {
+    throw new Error("Upstream API Error Caught! The URL did not provide audio. API Message: " + sampleText);
   }
 
-  return new Promise(function(resolve, reject) {
-    var stream = fs.createWriteStream(dest);
-    res.body.pipe(stream);
-    stream.on("finish", resolve);
-    stream.on("error", reject);
-  });
+  // If it's valid binary media data, write the clean buffer straight down
+  fs.writeFileSync(dest, buffer);
 }
 
 // REGENERATIVE AUDIO-SANITIZING MULTIPLEXER ENGINE

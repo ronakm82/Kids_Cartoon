@@ -29,6 +29,13 @@ async function getFile(input, dest) {
   });
   if (!res.ok) throw new Error("Download failed status: " + res.status);
 
+  // SANITY CHECK: Catch text/API errors masquerading as MP3s
+  var contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("json") || contentType.includes("text") || contentType.includes("html")) {
+    var textBody = await res.text();
+    throw new Error("Expected an audio file stream but received text/payload data instead! Content: " + textBody.substring(0, 300));
+  }
+
   return new Promise(function(resolve, reject) {
     var stream = fs.createWriteStream(dest);
     res.body.pipe(stream);

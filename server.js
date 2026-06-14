@@ -61,7 +61,7 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs) {
         "-c:v libx264",
         "-t " + durationSecs,
         "-pix_fmt yuv420p",
-        "-vf scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
+        "-s 1280x720",          // Use pure hardware scaling, dropping fragile video filters completely
         "-preset ultrafast",
         "-crf 28"
       ])
@@ -79,11 +79,12 @@ async function assembleVideoWithAudio(videoPath, voicePath, outputPath) {
       .input(voicePath)
       .outputOptions([
         "-threads 1",
-        "-map 0:v:0",       // Explicitly map video track from input 0
-        "-map 1:a:0",       // Explicitly map audio track from input 1
-        "-c:v copy",        // Direct stream copy the video frames (instant, zero RAM overhead)
-        "-c:a aac",         // Cleanly encode the audio channel to AAC
+        "-map 0:v:0",
+        "-map 1:a:0",
+        "-c:v copy",            // Copy the video frames directly with zero re-render cycles
+        "-c:a aac",             // Encode the audio stream layout to safe AAC
         "-b:a 192k",
+        "-shortest",            // Cleanly trim the final track timeline to match perfectly
         "-y"
       ])
       .output(outputPath)

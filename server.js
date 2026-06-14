@@ -13,6 +13,22 @@ app.use(express.json({ limit: "50mb" }));
 var OUTPUT_DIR = path.join(__dirname, "outputs");
 var JOBS_DIR = path.join(__dirname, "jobs");
 
+// Native helper to safely extract JPEG dimensions without external binary dependencies
+function getJpegDimensions(filePath) {
+  var b = fs.readFileSync(filePath);
+  var i = 4;
+  while (i < b.length) {
+    if (b[i] === 0xFF && (b[i+1] == 0xC0 || b[i+1] == 0xC2)) {
+      return {
+        height: (b[i+5] << 8) + b[i+6],
+        width: (b[i+7] << 8) + b[i+8]
+      };
+    }
+    i += (b[i+2] << 8) + b[i+3] + 2;
+  }
+  return { width: 1280, height: 720 }; // Safe widescreen fallback
+}
+
 [OUTPUT_DIR, JOBS_DIR].forEach(function(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
@@ -39,24 +55,33 @@ async function getFile(input, dest) {
   });
 }
 
-// UNIVERSALLY COMPATIBLE SINGLE-PASS ENGINE
+// PURE STREAM MULTIPLEXER ENGINE — NO FILTER GRAPHS
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
+  var dims = { width: 1280, height: 720 };
+  try { dims = getJpegDimensions(imagePath); } catch(e) { console.log("Dimension read fallback applied"); }
+
+  // Force mathematical even constraints via standard JavaScript bitwise math
+  var evenWidth = dims.width & ~1;
+  var evenHeight = dims.height & ~1;
+
+  console.log("Processing safe multiplex bounds: " + evenWidth + "x" + evenHeight);
+
   return new Promise(function(resolve, reject) {
-    console.log("Executing single-pass universal hardware multiplexer...");
     ffmpeg()
       .input(imagePath)
-      .inputOptions(["-loop 1"]) // Loop the background image infinitely
-      .input(voicePath)          // Read the audio track directly
+      .inputOptions(["-loop 1"]) 
+      .input(voicePath)          
       .outputOptions([
-        "-threads 1",            // Protect Railway memory limits
-        "-c:v mpeg4",            // Built-in universal encoder
-        "-preset ultrafast",     // Render instantly
-        "-c:a aac",              // Encode the audio stream layout to safe AAC
+        "-threads 1",            
+        "-c:v mpeg4",            
+        "-preset ultrafast",     
+        "-c:a aac",              
         "-b:a 192k",
-        "-pix_fmt yuv420p",      // High web compatibility layout
-        // Placed safely in output options to auto-round odd dimensions to even numbers
-        "-vf scale='bitand(iw,2)*-1+iw':'bitand(ih,2)*-1+ih'",
-        "-shortest"              // Cut cleanly when the voice track ends
+        "-pix_fmt yuv420p",      
+        "-wscale", "exact",
+        // Pass standard, un-failable raw crop dimensions instead of an active filter graph array
+        "-cropopt", "w=" + evenWidth + ":h=" + evenHeight + ":x=0:y=0",
+        "-shortest"              
       ])
       .output(outputPath)
       .on("end", resolve)

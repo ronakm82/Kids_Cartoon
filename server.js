@@ -46,45 +46,30 @@ async function getFile(input, dest) {
   console.log("Successfully stored asset. Path: " + dest + " | Disk Size: " + buffer.length + " bytes");
 }
 
-// FORMAT-AGNOSTIC SYNCHRONIZED COMPOSITION ENGINE
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
   return new Promise(function(resolve, reject) {
-    console.log("Invoking native format-agnostic execution chain...");
+    console.log("Rendering video with libx264 codec...");
 
     var args = [
-      "-threads", "1",
-      
-      // Forces FFmpeg to read the image as a standard, loopable video sequence frame layout
-      "-f", "image2",
-      "-framerate", "24",
       "-loop", "1",
       "-i", imagePath,
-      
-      // Read the raw voice track asset
       "-i", voicePath,
-      
-      // Strict layout stream mapping
-      "-map", "0:v:0",
-      "-map", "1:a:0?",
-      
-      // Universal codecs
-      "-c:v", "mpeg4",
+      "-c:v", "libx264",
       "-c:a", "aac",
-      "-b:a", "192k",
+      "-b:a", "128k",
       "-pix_fmt", "yuv420p",
-      
-      // Stop rendering the absolute millisecond the audio input hits EOF (End of File)
-      "-fflags", "+genpts", // Automatically rebuild missing presentation timestamps on the fly
       "-shortest",
+      "-preset", "ultrafast",
       "-y",
       outputPath
     ];
 
-    execFile(ffmpegPath, args, function(error, stdout, stderr) {
+    execFile(ffmpegPath, args, { maxBuffer: 10 * 1024 * 1024 }, function(error, stdout, stderr) {
       if (error) {
-        console.error("Native FFmpeg Error Logs:", stderr);
-        return reject(new Error(error.message));
+        console.error("FFmpeg Error:", stderr);
+        return reject(new Error("FFmpeg failed: " + error.message));
       }
+      console.log("Video render complete");
       resolve();
     });
   });

@@ -45,12 +45,7 @@ async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
     console.log("Executing single-pass universal hardware multiplexer...");
     ffmpeg()
       .input(imagePath)
-      .inputOptions([
-        "-loop 1", 
-        // Force the input image dimensions to automatically round to the nearest 
-        // even numbers natively, stopping the implicit filter graph crashes for good.
-        "-vf scale='bitand(iw,2)*-1+iw':'bitand(ih,2)*-1+ih'"
-      ]) 
+      .inputOptions(["-loop 1"]) // Loop the background image infinitely
       .input(voicePath)          // Read the audio track directly
       .outputOptions([
         "-threads 1",            // Protect Railway memory limits
@@ -59,6 +54,8 @@ async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
         "-c:a aac",              // Encode the audio stream layout to safe AAC
         "-b:a 192k",
         "-pix_fmt yuv420p",      // High web compatibility layout
+        // Placed safely in output options to auto-round odd dimensions to even numbers
+        "-vf scale='bitand(iw,2)*-1+iw':'bitand(ih,2)*-1+ih'",
         "-shortest"              // Cut cleanly when the voice track ends
       ])
       .output(outputPath)

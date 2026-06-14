@@ -54,38 +54,40 @@ async function getFile(input, dest) {
 }
 
 function createVideoWithAudio(imagePath, voicePath, musicPath, outputPath) {
-  console.log("Creating video with voice + music mix...");
+  console.log("Creating video with voice + music...");
   
   var cmd = ffmpegPath;
   
   if (musicPath && fs.existsSync(musicPath)) {
-    // Mix voice + music with better filter syntax
+    // Proper audio mixing syntax
     cmd += ' -loop 1 -i "' + imagePath + '"' +
            ' -i "' + voicePath + '"' +
            ' -i "' + musicPath + '"' +
-           ' -filter_complex "[1:a]volume=1.0[v];[2:a]volume=0.4[m];[v][m]amix=inputs=2:duration=first"' +
-           ' -map 0:v:0 -map 0:a:0?' +
-           ' -c:v libx264 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
+           ' -filter_complex "' +
+           '[1]volume=1.0[voice];' +
+           '[2]volume=0.5[music];' +
+           '[voice][music]amix=inputs=2:duration=first:dropout_transition=3[out]' +
+           '"' +
+           ' -map 0:v:0 -map "[out]"' +
+           ' -c:v libx264 -c:a aac -b:a 192k -ar 44100 -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
   } else {
-    // Voice only
     cmd += ' -loop 1 -i "' + imagePath + '"' +
            ' -i "' + voicePath + '"' +
            ' -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest -y "' + outputPath + '"';
   }
   
-  console.log("FFmpeg: " + cmd.substring(0, 150) + "...");
+  console.log("Running FFmpeg audio mix...");
   
   try {
-    var result = execSync(cmd, { encoding: 'utf8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 });
-    console.log("✓ Video created");
+    execSync(cmd, { encoding: 'utf8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 });
+    console.log("✓ Video created with audio mix");
     
     if (!fs.existsSync(outputPath)) throw new Error("Output not created");
-    var stats = fs.statSync(outputPath);
-    console.log("✓ Size: " + (stats.size / 1024 / 1024).toFixed(2) + " MB");
+    var size = fs.statSync(outputPath).size;
+    console.log("✓ Output: " + (size / 1024 / 1024).toFixed(2) + " MB");
     
-    if (stats.size < 100000) throw new Error("File too small");
   } catch (err) {
-    console.error("FFmpeg error: " + err.message);
+    console.error("FFmpeg failed: " + err.message);
     throw err;
   }
 }

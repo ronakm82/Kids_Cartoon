@@ -55,24 +55,20 @@ async function getFile(input, dest) {
   });
 }
 
-// PURE STREAM MULTIPLEXER ENGINE — ZERO FILTERS, ZERO EXTRA OPTIONS
+// THE ULTIMATE ZERO-FILTER, ZERO-ENCODE MULTIPLEXER ENGINE
 async function renderSingleSceneVideo(imagePath, voicePath, outputPath) {
-  var dims = { width: 1280, height: 720 };
-  try { dims = getJpegDimensions(imagePath); } catch(e) { console.log("Dimension read fallback applied"); }
-
   return new Promise(function(resolve, reject) {
+    console.log("Executing pure hardware stream-copy multiplexer...");
     ffmpeg()
       .input(imagePath)
-      .inputOptions(["-loop 1", "-framerate 24"]) 
+      .inputOptions(["-loop 1", "-f image2"]) // Force native image stream reader
       .input(voicePath)          
       .outputOptions([
         "-threads 1",            // Protect Railway memory limits
-        "-c:v mpeg4",            // Universally built-in encoder
-        "-preset ultrafast",     // Render instantly
-        "-c:a aac",              // Encode the audio stream layout to safe AAC
+        "-c:v copy",             // STREAM COPY THE VIDEO (Zero processing, completely immune to filter crashes!)
+        "-c:a aac",              // Cleanly encode the audio channel to safe AAC
         "-b:a 192k",
-        "-pix_fmt yuv420p",      // High web compatibility layout
-        "-shortest"              // Cut cleanly when the voice track ends
+        "-shortest"              // Automatically cut the loop when the voice track ends
       ])
       .output(outputPath)
       .on("end", resolve)

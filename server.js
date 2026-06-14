@@ -113,10 +113,8 @@ async function concatenateClips(clipPaths, outputPath) {
       .videoFilters("[0:v]fade=t=out:st=" + fadeIndex + ":d=0.5[v]")
       .outputOptions([
         "-c:v libx264",
-        "-c:a aac",
         "-pix_fmt yuv420p",
-        "-map [v]",
-        "-map 0:a",
+        "-map [v]",         // Map ONLY the video stream from the video filter
         "-preset faster",
         "-crf 22"
       ])

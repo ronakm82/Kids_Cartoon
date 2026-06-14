@@ -51,13 +51,13 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs) {
       .input(imagePath)
       .inputOptions(["-loop 1", "-framerate 24"])
       .outputOptions([
-        "-threads 1",                 // Force FFmpeg to use exactly 1 thread to prevent memory spikes
+        "-threads 1",                 // Restrict to single-core execution to save server RAM
         "-c:v libx264",
         "-t " + durationSecs,
         "-pix_fmt yuv420p",
         "-vf scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
-        "-preset ultrafast",          // Changed from 'faster' to 'ultrafast' to cut RAM usage and process instantly
-        "-crf 28"                     // Slightly lower quality profile to dramatically optimize memory footprints
+        "-preset ultrafast",          // Maximum rendering speed to lower CPU limits
+        "-crf 28"                     // Efficient compression ratio
       ])
       .output(outputPath)
       .on("end", resolve)
@@ -68,25 +68,27 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs) {
 
 async function concatenateClips(clipPaths, outputPath) {
   if (clipPaths.length === 1) {
-    fs.copyFileSync(clipPaths[0], outputPath);
+    // Non-blocking async file copy
+    fs.promises.copyFile(clipPaths[0], outputPath).then(resolve).catch(reject);
     return;
   }
   var concatFile = outputPath.replace(/\.mp4$/, "_concat.txt");
   var concatContent = clipPaths.map(function(p) { return "file '" + p + "'"; }).join("\n");
-  fs.writeFileSync(concatFile, concatContent);
+  
+  await fs.promises.writeFile(concatFile, concatContent);
 
   return new Promise(function(resolve, reject) {
     ffmpeg()
       .input(concatFile)
       .inputOptions(["-f concat", "-safe 0"])
-      .outputOptions(["-c:v libx264", "-pix_fmt yuv420p", "-preset faster", "-crf 22"])
+      .outputOptions(["-threads 1", "-c:v libx264", "-pix_fmt yuv420p", "-preset ultrafast", "-crf 28"])
       .output(outputPath)
-      .on("end", function() {
-        if (fs.existsSync(concatFile)) fs.unlinkSync(concatFile);
+      .on("end", async function() {
+        try { await fs.promises.unlink(concatFile); } catch(e){}
         resolve();
       })
-      .on("error", function(err) {
-        if (fs.existsSync(concatFile)) fs.unlinkSync(concatFile);
+      .on("error", async function(err) {
+        try { await fs.promises.unlink(concatFile); } catch(e){}
         reject(err);
       })
       .run();
@@ -102,9 +104,10 @@ async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPat
       .input(voicePath)
       .input(musicPath)
       .outputOptions([
+        "-threads 1",
         "-map 0:v:0",
         "-map 1:a:0",
-        "-c:v copy",
+        "-c:v copy",                  // Direct stream copy (ultra lightweight, no rendering)
         "-c:a aac",
         "-b:a 192k",
         "-shortest",
@@ -117,12 +120,13 @@ async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPat
         resolve();
       })
       .on("error", function(err) {
-        console.log("Music track mapping failed. Initiating standard 2-input stream multiplex pipeline...");
+        console.log("Music track mapping failed. Running fallback stream multiplex pipeline...");
         
         ffmpeg()
           .input(videoPath)
           .input(voicePath)
           .outputOptions([
+            "-threads 1",
             "-c:v copy",
             "-c:a aac",
             "-b:a 192k",
@@ -133,10 +137,7 @@ async function assembleVideoWithAudio(videoPath, voicePath, musicPath, outputPat
             console.log("Failsafe complete: Video saved with pure voiceover track layout.");
             resolve();
           })
-          .on("error", function(fallbackErr) {
-            console.error("Failsafe pipeline multiplexer failed: " + fallbackErr.message);
-            reject(fallbackErr);
-          })
+          .on("error", reject)
           .run();
       })
       .run();
@@ -189,14 +190,16 @@ async function processVideo(jobId, voiceInput, musicInput, scenesInput, serverUr
 
       if (scene.imageUrl && scene.imageUrl.startsWith("data:image")) {
         var base64Data = scene.imageUrl.split(";base64,").pop();
-        fs.writeFileSync(imagePath, Buffer.from(base64Data, "base64"));
+        // Converted to non-blocking async file writer
+        await fs.promises.writeFile(imagePath, Buffer.from(base64Data, "base64"));
       } else {
         await getFile(scene.imageUrl, imagePath);
       }
 
       await imageToVideoClip(imagePath, clipPath, duration);
       clipPaths.push(clipPath);
-      try { fs.unlinkSync(imagePath); } catch(e){}
+      
+      try { await fs.promises.unlink(imagePath); } catch(e){}
     }
 
     var concatPath = path.join(tmpDir, "concatenated.mp4");
@@ -206,9 +209,26 @@ async function processVideo(jobId, voiceInput, musicInput, scenesInput, serverUr
     await getFile(musicUrl, musicPath);
 
     await assembleVideoWithAudio(concatPath, voicePath, musicPath, outputPath);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    
+    // Clean up directory safely
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
 
     var fileSizeMb = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(1);
     saveJob(jobId, {
       status: "done",
-      final_video_url: serverUrl + "/outputs/final_" + jobId +
+      final_video_url: serverUrl + "/outputs/final_" + jobId + ".mp4",
+      file_size_mb: fileSizeMb,
+      job_id: jobId,
+      duration_secs: totalDuration,
+      completed: Date.now()
+    });
+    console.log("[" + jobId + "] Saved final composition render perfectly.");
+
+  } catch (err) {
+    try { if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(e){}
+    console.error("[" + jobId + "] Failed processing task: " + err.message);
+    saveJob(jobId, { status: "failed", error: err.message, job_id: jobId });
+  }
+}
+
+module.exports = { processVideo };

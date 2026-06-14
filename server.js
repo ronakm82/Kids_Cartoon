@@ -95,6 +95,13 @@ async function imageToVideoClip(imagePath, outputPath, durationSecs, isLastScene
 }
 
 async function concatenateClips(clipPaths, outputPath) {
+  // Defensive Check: If there's only 1 clip, skip heavy filtering/concatenation entirely
+  if (clipPaths.length === 1) {
+    console.log("Only 1 clip detected. Bypassing concatenation step...");
+    fs.copyFileSync(clipPaths[0], outputPath);
+    return;
+  }
+
   console.log("Concatenating " + clipPaths.length + " clips with fade transitions...");
 
   var concatFile = outputPath.replace(/\.mp4$/, "_concat.txt");
@@ -114,7 +121,7 @@ async function concatenateClips(clipPaths, outputPath) {
       .outputOptions([
         "-c:v libx264",
         "-pix_fmt yuv420p",
-        "-map [v]",         // Map ONLY the video stream from the video filter
+        "-map [v]",
         "-preset faster",
         "-crf 22"
       ])
